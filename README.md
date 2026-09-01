@@ -42,22 +42,23 @@ scheduling" that is actually a reliable, auditable optimizer with an LLM
 concierge layer, not a black box making unaccountable calls about who
 works nights.
 
-## Try it in five minutes
+## Run it
+
+**What you need:** Docker. That's the whole list.
 
 ```bash
+git clone https://github.com/dodiariespodcast-netizen/EMAI.git && cd EMAI
 cp .env.example .env
 python3 -c "import secrets; print(secrets.token_urlsafe(48))"   # paste into SECRET_KEY
 docker compose up --build
 docker compose exec app python -m app.seed                      # demo data
 ```
 
-Then open **http://localhost:8000** and sign in as
-`admin@demo-em.example.com` / `demo1234`.
+Open **http://localhost:8000** and sign in as `admin@demo-em.example.com` /
+`demo1234`. First run takes a few minutes to build; after that it's seconds.
 
-It ships as a single container: the API serves the web app from the same
-origin, so there's one service, one URL, no CORS to configure, and no API
-address baked into the frontend build. Putting it on Render or Fly is a
-`render.yaml` / `fly.toml` away — see **[DEPLOYMENT.md](DEPLOYMENT.md)**.
+No Docker? You need Python 3.11+ and Node 20+, then `make setup && make seed`,
+and `make dev-api` / `make dev-web` in two terminals.
 
 The seed builds a realistic 14-physician group across two sites -- day, swing
 and night coverage for four weeks, a mix of employed and locums physicians,
@@ -66,8 +67,19 @@ runs the optimizer over it, so every screen has real data on it from the
 first click. It also prints physician logins so you can see the
 self-service side.
 
-Without Docker: `make setup && make seed`, then `make dev-api` and
-`make dev-web` in two terminals. `make help` lists everything else.
+## Put it online
+
+It ships as a **single container**: the API serves the web app from the same
+origin, so there's one service, one URL, no CORS to configure, and no API
+address compiled into the frontend.
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/dodiariespodcast-netizen/EMAI)
+
+That button reads `render.yaml`: it provisions the app plus a managed
+Postgres, generates `SECRET_KEY`, and wires up its own URL. Fly.io users have
+a `fly.toml`; any other Docker host can run the published image directly.
+Full instructions, including the pre-launch checklist, are in
+**[DEPLOYMENT.md](DEPLOYMENT.md)**.
 
 ## What's in the repo
 
