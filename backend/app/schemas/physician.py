@@ -40,6 +40,17 @@ class PhysicianUpdate(BaseModel):
     site_ids: list[str] | None = None
 
 
+class PhysicianPreferencesUpdate(BaseModel):
+    """The subset of a physician's own record a physician (not just a
+    scheduler) is allowed to self-edit -- their standing shift preferences.
+    Everything else on Physician (FTE, employment type, pay rate, hard
+    rule overrides) stays scheduler-only via PhysicianUpdate."""
+
+    night_preference: int | None = Field(default=None, ge=-2, le=2)
+    weekend_preference: int | None = Field(default=None, ge=-2, le=2)
+    holiday_preference: int | None = Field(default=None, ge=-2, le=2)
+
+
 class PhysicianRead(BaseModel):
     id: str
     org_id: str

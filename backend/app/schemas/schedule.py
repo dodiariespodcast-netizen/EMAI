@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 
 from pydantic import BaseModel, Field
 
@@ -45,6 +45,23 @@ class AssignmentRead(BaseModel):
     status: str
 
     model_config = {"from_attributes": True}
+
+
+class AssignmentDetail(AssignmentRead):
+    """Assignment with the shift/site fields a client needs to render it
+    (date, time, category, site) denormalized in, so callers like the
+    shift-swap marketplace or a "my schedule" view don't have to separately
+    resolve shift instances and schedule runs themselves."""
+
+    schedule_run_id: str
+    schedule_run_status: ScheduleRunStatus
+    site_id: str
+    site_name: str
+    date: date
+    start_datetime: datetime
+    end_datetime: datetime
+    category: str
+    shift_type_name: str
 
 
 class ScheduleRunRead(BaseModel):

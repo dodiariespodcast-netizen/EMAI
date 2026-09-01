@@ -3,9 +3,10 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, require_scheduler
 from app.database import get_db
+from app.models.enums import UserRole
 from app.models.physician import Physician, PhysicianSite
 from app.models.tenancy import User
-from app.schemas.physician import PhysicianCreate, PhysicianRead, PhysicianUpdate
+from app.schemas.physician import PhysicianCreate, PhysicianPreferencesUpdate, PhysicianRead, PhysicianUpdate
 
 router = APIRouter(prefix="/physicians", tags=["physicians"])
 
@@ -86,6 +87,36 @@ def update_physician(
         for site_id in payload.site_ids:
             db.add(PhysicianSite(physician_id=physician.id, site_id=site_id))
 
+    db.commit()
+    db.refresh(physician)
+    return _to_read(physician, db)
+
+
+@router.patch("/{physician_id}/preferences", response_model=PhysicianRead)
+def update_own_preferences(
+    physician_id: str,
+    payload: PhysicianPreferencesUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> PhysicianRead:
+    """Self-service preference editing: a physician can update their own
+    night/weekend/holiday preference without scheduler privileges. A
+    scheduler can also use this (or the full PATCH /physicians/{id})."""
+    is_self = current_user.physician_id == physician_id
+    is_scheduler = current_user.role in (UserRole.OWNER, UserRole.ADMIN, UserRole.SCHEDULER)
+    if not is_self and not is_scheduler:
+        raise HTTPException(status_code=403, detail="Not authorized to edit this physician's preferences")
+
+    physician = (
+        db.query(Physician)
+        .filter(Physician.id == physician_id, Physician.org_id == current_user.org_id)
+        .first()
+    )
+    if physician is None:
+        raise HTTPException(status_code=404, detail="Physician not found")
+
+    for field, value in payload.model_dump(exclude_unset=True).items():
+        setattr(physician, field, value)
     db.commit()
     db.refresh(physician)
     return _to_read(physician, db)

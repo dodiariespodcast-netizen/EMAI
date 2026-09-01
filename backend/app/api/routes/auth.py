@@ -16,6 +16,7 @@ from app.schemas.auth import (
     Token,
     UserCreate,
     UserRead,
+    UserUpdate,
 )
 from app.services.audit import log_audit
 from app.services.auth.oauth import OAuthVerificationError, verify_id_token
@@ -101,6 +102,34 @@ def create_user(
     log_audit(
         db, current_user.org_id, "user.invite", "user", user.id, user_id=current_user.id,
         details={"email": payload.email, "role": payload.role.value},
+    )
+    db.commit()
+    db.refresh(user)
+    return UserRead.model_validate(user)
+
+
+@router.get("/users", response_model=list[UserRead])
+def list_users(db: Session = Depends(get_db), current_user: User = Depends(require_scheduler)) -> list[UserRead]:
+    return db.query(User).filter(User.org_id == current_user.org_id).all()
+
+
+@router.patch("/users/{user_id}", response_model=UserRead)
+def update_user(
+    user_id: str,
+    payload: UserUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_scheduler),
+) -> UserRead:
+    user = db.query(User).filter(User.id == user_id, User.org_id == current_user.org_id).first()
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    if user.id == current_user.id and payload.is_active is False:
+        raise HTTPException(status_code=400, detail="Cannot deactivate your own account")
+    for field, value in payload.model_dump(exclude_unset=True).items():
+        setattr(user, field, value)
+    log_audit(
+        db, current_user.org_id, "user.update", "user", user.id, user_id=current_user.id,
+        details=payload.model_dump(exclude_unset=True, mode="json"),
     )
     db.commit()
     db.refresh(user)

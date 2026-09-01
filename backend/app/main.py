@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import (
+    assignments,
     audit,
     auth,
     calendar_feed,
@@ -57,6 +58,7 @@ app.include_router(physicians.router)
 app.include_router(shifts.router)
 app.include_router(requests_routes.router)
 app.include_router(schedules.router)
+app.include_router(assignments.router)
 app.include_router(swaps.router)
 app.include_router(credentials.router)
 app.include_router(audit.router)

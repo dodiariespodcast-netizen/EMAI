@@ -191,3 +191,69 @@ def test_physician_role_cannot_manage_roster(client):
         headers=doc_headers,
     )
     assert resp.status_code == 403
+
+
+def test_physician_can_self_edit_preferences_but_nothing_else(client):
+    signup = client.post(
+        "/auth/signup",
+        json={"org_name": "Prefs EM", "org_slug": "prefs-em", "email": "owner@prefs.example.com", "password": "supersecret1"},
+    )
+    owner_headers = _auth_headers(signup.json()["access_token"])
+
+    physician = client.post(
+        "/physicians",
+        json={"first_name": "Sam", "last_name": "Lee", "email": "sam@prefs.example.com"},
+        headers=owner_headers,
+    ).json()
+    client.post(
+        "/auth/users",
+        json={"email": physician["email"], "password": "supersecret1", "role": "physician", "physician_id": physician["id"]},
+        headers=owner_headers,
+    )
+    login = client.post("/auth/login", data={"username": physician["email"], "password": "supersecret1"})
+    doc_headers = _auth_headers(login.json()["access_token"])
+
+    own_prefs = client.patch(
+        f"/physicians/{physician['id']}/preferences", json={"night_preference": 2}, headers=doc_headers
+    )
+    assert own_prefs.status_code == 200, own_prefs.text
+    assert own_prefs.json()["night_preference"] == 2
+
+    # Can't touch fields outside the preferences endpoint's scope, and can't
+    # use the full physician PATCH at all without scheduler privileges.
+    full_patch = client.patch(f"/physicians/{physician['id']}", json={"fte": 0.2}, headers=doc_headers)
+    assert full_patch.status_code == 403
+
+    other = client.post(
+        "/physicians", json={"first_name": "Other", "last_name": "Doc", "email": "other@prefs.example.com"}, headers=owner_headers
+    ).json()
+    cross_edit = client.patch(f"/physicians/{other['id']}/preferences", json={"night_preference": -2}, headers=doc_headers)
+    assert cross_edit.status_code == 403
+
+
+def test_user_management(client):
+    signup = client.post(
+        "/auth/signup",
+        json={"org_name": "Users EM", "org_slug": "users-em", "email": "owner@users.example.com", "password": "supersecret1"},
+    )
+    owner_headers = _auth_headers(signup.json()["access_token"])
+
+    created = client.post(
+        "/auth/users",
+        json={"email": "sched@users.example.com", "password": "supersecret1", "role": "scheduler"},
+        headers=owner_headers,
+    )
+    assert created.status_code == 201, created.text
+
+    listing = client.get("/auth/users", headers=owner_headers)
+    assert listing.status_code == 200
+    emails = {u["email"] for u in listing.json()}
+    assert {"owner@users.example.com", "sched@users.example.com"} <= emails
+
+    updated = client.patch(f"/auth/users/{created.json()['id']}", json={"role": "admin"}, headers=owner_headers)
+    assert updated.status_code == 200
+    assert updated.json()["role"] == "admin"
+
+    owner_id = signup.json()["user"]["id"]
+    self_deactivate = client.patch(f"/auth/users/{owner_id}", json={"is_active": False}, headers=owner_headers)
+    assert self_deactivate.status_code == 400

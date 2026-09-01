@@ -21,6 +21,12 @@ class UserCreate(BaseModel):
     physician_id: str | None = None
 
 
+class UserUpdate(BaseModel):
+    role: UserRole | None = None
+    is_active: bool | None = None
+    physician_id: str | None = None
+
+
 class UserLogin(BaseModel):
     email: EmailStr
     password: str
