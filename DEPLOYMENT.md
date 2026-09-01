@@ -38,6 +38,27 @@ make dev-api        # http://localhost:8000 now serves the app too
 
 ## Host it (today)
 
+### Fastest: run the published image
+
+Every push to `main` (and to a `claude/**` branch) builds the image and pushes
+it to this repo's GitHub Container Registry, so there is nothing to build:
+
+```bash
+docker run -p 8000:8000 \
+  -e SECRET_KEY=$(python3 -c "import secrets; print(secrets.token_urlsafe(48))") \
+  -e PUBLIC_BASE_URL=http://localhost:8000 \
+  ghcr.io/dodiariespodcast-netizen/emai:latest
+```
+
+That boots on SQLite inside the container -- fine for a demo, not for real
+data. Add `-e DATABASE_URL=postgres://...` and it migrates and runs against
+Postgres instead. Any host that can run a container image (Railway, Render,
+Fly, ECS, Cloud Run, a VPS) can point at that same reference.
+
+GHCR packages start out **private**. Make the package public from
+`github.com/users/<owner>/packages` if you want a host -- or anyone
+evaluating the product -- to pull it without credentials.
+
 ### Render
 
 The repo has a `render.yaml`. Create a Blueprint from your fork; it provisions

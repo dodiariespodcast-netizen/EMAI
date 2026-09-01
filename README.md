@@ -77,7 +77,17 @@ address compiled into the frontend.
 
 That button reads `render.yaml`: it provisions the app plus a managed
 Postgres, generates `SECRET_KEY`, and wires up its own URL. Fly.io users have
-a `fly.toml`; any other Docker host can run the published image directly.
+a `fly.toml`.
+
+Every push also publishes the image, so any other Docker host can skip the
+build entirely:
+
+```bash
+docker run -p 8000:8000 \
+  -e SECRET_KEY=$(python3 -c "import secrets; print(secrets.token_urlsafe(48))") \
+  ghcr.io/dodiariespodcast-netizen/emai:latest
+```
+
 Full instructions, including the pre-launch checklist, are in
 **[DEPLOYMENT.md](DEPLOYMENT.md)**.
 
