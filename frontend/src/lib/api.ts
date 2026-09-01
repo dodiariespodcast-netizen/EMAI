@@ -1,4 +1,16 @@
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
+function resolveApiBaseUrl(): string {
+  const configured = import.meta.env.VITE_API_BASE_URL?.trim();
+  if (configured) return configured;
+  // A production build with no API URL configured talks to whatever origin
+  // served it. That's the single-container deployment: the API serves this
+  // bundle, so there's nothing to configure and no CORS to get wrong.
+  // The dev server runs on a different port than the API, so it still needs
+  // an explicit default.
+  if (import.meta.env.DEV) return "http://localhost:8000";
+  return window.location.origin;
+}
+
+const API_BASE_URL = resolveApiBaseUrl();
 
 export class ApiError extends Error {
   status: number;

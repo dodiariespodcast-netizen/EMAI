@@ -1,6 +1,6 @@
 import { useAuth, isScheduler } from "../lib/auth";
 import { useFetch } from "../lib/hooks";
-import { api } from "../lib/api";
+import { api, API_BASE_URL } from "../lib/api";
 import type {
   Credential,
   Physician,
@@ -70,7 +70,7 @@ function PhysicianPanel({ physicianId }: { physicianId: string }) {
               <>
                 <p className="mb-2">Paste this URL into your calendar app's "subscribe by URL" option:</p>
                 <code className="block break-all rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-700">
-                  {new URL(`/calendar/${physician.data.calendar_token}.ics`, apiBase()).toString()}
+                  {new URL(`/calendar/${physician.data.calendar_token}.ics`, API_BASE_URL).toString()}
                 </code>
               </>
             ) : (
@@ -187,8 +187,4 @@ function AdminPanel() {
       </div>
     </section>
   );
-}
-
-function apiBase(): string {
-  return import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
 }

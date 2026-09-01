@@ -48,11 +48,16 @@ works nights.
 cp .env.example .env
 python3 -c "import secrets; print(secrets.token_urlsafe(48))"   # paste into SECRET_KEY
 docker compose up --build
-docker compose run --rm api python -m app.seed                  # demo data
+docker compose exec app python -m app.seed                      # demo data
 ```
 
-Then open **http://localhost:5173** and sign in as
+Then open **http://localhost:8000** and sign in as
 `admin@demo-em.example.com` / `demo1234`.
+
+It ships as a single container: the API serves the web app from the same
+origin, so there's one service, one URL, no CORS to configure, and no API
+address baked into the frontend build. Putting it on Render or Fly is a
+`render.yaml` / `fly.toml` away — see **[DEPLOYMENT.md](DEPLOYMENT.md)**.
 
 The seed builds a realistic 14-physician group across two sites -- day, swing
 and night coverage for four weeks, a mix of employed and locums physicians,
@@ -63,8 +68,6 @@ self-service side.
 
 Without Docker: `make setup && make seed`, then `make dev-api` and
 `make dev-web` in two terminals. `make help` lists everything else.
-
-Deploying for real is covered in **[DEPLOYMENT.md](DEPLOYMENT.md)**.
 
 ## What's in the repo
 
@@ -108,7 +111,7 @@ backend/
       rate_limit.py        Throttles sign-in and email-sending endpoints
       observability.py     Request ids, structured logs, error envelope
   alembic/            DB migrations
-  tests/              pytest: solver unit tests + full API workflow tests (62)
+  tests/              pytest: solver unit tests + full API workflow tests (74)
 ```
 
 **Multi-tenant from day one**: every table carries `org_id`; a signup
@@ -195,7 +198,7 @@ Docs at `http://localhost:8000/docs`. Or via Docker (Postgres included):
 docker compose up --build
 ```
 
-Run the test suite (62 tests):
+Run the test suite (74 tests):
 
 ```bash
 pytest -v
@@ -354,14 +357,18 @@ product already fits that model without changes to the core:
 
 ## Verification
 
-- **62 backend tests** (`make test`) covering the solver in isolation, the
+- **74 backend tests** (`make test`) covering the solver in isolation, the
   full API surface, auth/OAuth/reset flows, manual overrides, reports,
-  imports, rate limiting, and the demo seed.
+  imports, rate limiting, SPA serving, config normalization, and the demo
+  seed.
 - **A 24-step end-to-end browser test** (`frontend/scripts/e2e-smoke.mjs`)
   that drives a real browser against a real backend through the whole
   product: signup → sites → shift types → coverage → roster → CSV import →
   optimizer run → publish → hand-editing shifts on the calendar → reports →
   inviting a user → that user setting their own password from the invite
   link → physician self-service, asserting zero console errors throughout.
+  The smoke test runs against the single-origin server -- the same shape
+  that gets deployed -- rather than a dev-only two-server setup.
 - **CI** (`.github/workflows/ci.yml`) runs all of the above on every push,
-  plus a migration up/down check and a lint/typecheck/build of the frontend.
+  plus a migration up/down check, a lint/typecheck/build of the frontend, and
+  a Docker image build that boots the container and checks it serves the app.

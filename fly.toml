@@ -1,0 +1,46 @@
+# Fly.io deployment. Set up once with:
+#
+#   fly launch --no-deploy --copy-config
+#   fly postgres create --name emai-scheduler-db
+#   fly postgres attach emai-scheduler-db          # sets DATABASE_URL
+#   fly secrets set SECRET_KEY=$(python3 -c "import secrets; print(secrets.token_urlsafe(48))")
+#   fly secrets set PUBLIC_BASE_URL=https://<your-app>.fly.dev
+#   fly deploy
+#
+# Then seed demo data with:  fly ssh console -C "python -m app.seed"
+#
+# Note: `fly postgres attach` sets DATABASE_URL to a postgres:// URL, which
+# SQLAlchemy needs as postgresql+psycopg2://. The app rewrites that scheme
+# itself, so no manual fixing is required.
+
+app = "emai-scheduler"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  ENVIRONMENT = "production"
+  CORS_ORIGINS = "[]"
+  PORT = "8000"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[http_service.checks]]
+    grace_period = "20s"
+    interval = "30s"
+    method = "GET"
+    timeout = "5s"
+    path = "/health/ready"
+
+[[vm]]
+  # The CP-SAT solver is the only heavy thing here and it runs in bursts;
+  # 1GB is comfortable for a group of a few dozen physicians.
+  memory = "1gb"
+  cpu_kind = "shared"
+  cpus = 1

@@ -1,6 +1,6 @@
 # Common tasks. `make help` lists them.
 .DEFAULT_GOAL := help
-.PHONY: help setup dev-api dev-web test lint build seed reset-demo migrate up down logs clean
+.PHONY: help setup dev-api dev-web test lint build seed reset-demo migrate up down logs clean seed-docker e2e
 
 BACKEND := backend
 FRONTEND := frontend
@@ -43,14 +43,20 @@ reset-demo: ## Wipe and reload the demo organization
 migrate: ## Apply database migrations
 	cd $(BACKEND) && .venv/bin/alembic upgrade head
 
-up: ## Start the whole stack in Docker
+up: ## Start the whole stack in Docker (app on :8000)
 	docker compose up --build
+
+seed-docker: ## Load demo data into the running Docker stack
+	docker compose exec app python -m app.seed
 
 down: ## Stop the Docker stack
 	docker compose down
 
 logs: ## Tail Docker logs
 	docker compose logs -f
+
+e2e: ## Run the browser smoke test (needs `make build` then `make dev-api` running)
+	cd $(FRONTEND) && SMOKE_BASE_URL=http://localhost:8000 npm run e2e:smoke
 
 clean: ## Remove build artifacts, caches and local databases
 	rm -rf $(FRONTEND)/dist $(FRONTEND)/node_modules/.vite

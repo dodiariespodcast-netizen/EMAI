@@ -21,20 +21,31 @@ def test_every_response_carries_a_request_id(client):
     assert supplied.headers["X-Request-ID"] == "trace-me-123"
 
 
-def test_unhandled_errors_return_a_traceable_envelope(client):
+def test_unhandled_errors_return_a_traceable_envelope():
     """A crash must not leak a stack trace to the caller, but must hand back
-    the id that identifies it in the logs."""
-    from app.main import app
+    the id that identifies it in the logs.
 
-    @app.get("/_test_boom")
+    Built on its own app rather than by appending a route to the real one:
+    the real app mounts the SPA catch-all last, so anything registered after
+    it would never be reached.
+    """
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.core.observability import install as install_observability
+
+    app = FastAPI()
+    install_observability(app)
+
+    @app.get("/boom")
     def boom():
         raise RuntimeError("simulated failure")
 
-    try:
-        resp = client.get("/_test_boom")
-        assert resp.status_code == 500
-        body = resp.json()
-        assert body["request_id"]
-        assert "simulated failure" not in resp.text
-    finally:
-        app.router.routes = [r for r in app.router.routes if getattr(r, "path", None) != "/_test_boom"]
+    with TestClient(app, raise_server_exceptions=False) as client:
+        resp = client.get("/boom")
+
+    assert resp.status_code == 500
+    body = resp.json()
+    assert body["request_id"]
+    assert resp.headers["X-Request-ID"] == body["request_id"]
+    assert "simulated failure" not in resp.text

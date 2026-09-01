@@ -79,6 +79,6 @@ def consume_token(db: Session, token: str) -> User | None:
 def build_link(token: str, purpose: str = "reset") -> str:
     """The URL we email. Points at the frontend, which then POSTs the token
     back to /auth/password-reset/confirm."""
-    base = get_settings().frontend_base_url.rstrip("/")
+    base = get_settings().app_base_url
     path = "set-password" if purpose == "invite" else "reset-password"
     return f"{base}/{path}?token={token}"

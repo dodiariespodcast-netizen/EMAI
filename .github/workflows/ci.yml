@@ -85,38 +85,60 @@ jobs:
         working-directory: backend
         run: pip install -r requirements.txt
 
-      - name: Start the API
+      # No VITE_API_BASE_URL: the bundle uses its own origin, which is how
+      # it's actually deployed. The API below serves this build.
+      - name: Build the frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+          npm run build
+
+      - name: Start the API serving that build
         working-directory: backend
         env:
           SECRET_KEY: ci-secret-not-used-outside-tests
           DATABASE_URL: sqlite:///./e2e.db
           RATE_LIMIT_ENABLED: "false"
+          PUBLIC_BASE_URL: http://localhost:8000
         run: |
           uvicorn app.main:app --port 8000 &
           for _ in $(seq 1 30); do
             curl -sf http://localhost:8000/health >/dev/null && break
             sleep 1
           done
+          # The API must be serving the frontend, not just the API.
+          curl -sf http://localhost:8000/ | grep -q "<div id=\"root\">"
 
-      - name: Build and serve the frontend
+      - name: Run the smoke test against the single-origin server
         working-directory: frontend
         env:
-          VITE_API_BASE_URL: http://localhost:8000
-        run: |
-          npm ci
-          npx playwright install --with-deps chromium
-          npm run build
-          npx vite preview --port 4173 --strictPort &
-          for _ in $(seq 1 30); do
-            curl -sf http://localhost:4173/ >/dev/null && break
-            sleep 1
-          done
-
-      - name: Run the smoke test
-        working-directory: frontend
-        env:
-          SMOKE_BASE_URL: http://localhost:4173
-          # Use the Chromium that `playwright install` just placed, rather than
-          # the sandbox-specific path the script defaults to.
-          PLAYWRIGHT_CHROMIUM_PATH: ""
+          SMOKE_BASE_URL: http://localhost:8000
         run: node scripts/e2e-smoke.mjs
+
+  docker:
+    name: Docker image builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build the single-container image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: emai-scheduler:ci
+      - name: Boot it and check it serves the app
+        run: |
+          docker run -d --name emai -p 8000:8000 \
+            -e SECRET_KEY=ci-secret-not-used-outside-tests \
+            -e DATABASE_URL=sqlite:////tmp/ci.db \
+            emai-scheduler:ci
+          for _ in $(seq 1 40); do
+            curl -sf http://localhost:8000/health >/dev/null && break
+            sleep 2
+          done
+          curl -sf http://localhost:8000/health/ready
+          curl -sf http://localhost:8000/ | grep -q "<div id=\"root\">"
+          docker logs emai

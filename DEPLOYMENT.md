@@ -1,112 +1,128 @@
 # Deploying EMAI Scheduler
 
-Three paths, in increasing order of effort. All of them need the same four
-decisions: where Postgres lives, what `SECRET_KEY` is, what URL the API is
-reachable at, and what URL the app is reachable at.
+The app ships as **one container** that serves both the API and the web UI
+from the same origin. That means one service to deploy, one URL, no CORS to
+configure, and nothing about your API address baked into the frontend bundle.
+
+You need exactly two decisions to go live: where Postgres lives, and what
+`SECRET_KEY` is.
 
 ---
 
-## 1. Try it locally (5 minutes)
+## Run it locally (5 minutes)
 
 ```bash
 cp .env.example .env
-# put a real value in SECRET_KEY:
-python3 -c "import secrets; print(secrets.token_urlsafe(48))"
+python3 -c "import secrets; print(secrets.token_urlsafe(48))"   # paste into SECRET_KEY
 
 docker compose up --build
-docker compose run --rm api python -m app.seed    # optional demo data
+docker compose exec app python -m app.seed    # optional demo data
 ```
 
-- App: http://localhost:5173
-- API docs: http://localhost:8000/docs
-- Demo logins (after seeding): `admin@demo-em.example.com` / `demo1234`,
-  and three physician accounts printed by the seed command.
+Open **http://localhost:8000**. After seeding, sign in as
+`admin@demo-em.example.com` / `demo1234`; the seed prints physician logins
+too, so you can see the self-service side.
 
-Without Docker, use `make setup` then `make seed`, `make dev-api`, `make dev-web`.
+Without Docker: `make setup`, `make seed`, then `make dev-api` and
+`make dev-web` (the dev server runs on :5173 and talks to the API on :8000).
 
----
-
-## 2. One small server (a $10-20/mo VPS)
-
-Enough for the first several customers -- a 40-physician group generates
-trivial load; the solver is the only heavy thing and it runs for seconds at
-a time.
-
-1. Point two DNS records at the box, e.g. `app.yourdomain.com` and
-   `api.yourdomain.com`.
-2. Clone the repo, write `.env`:
-
-   ```bash
-   SECRET_KEY=<generated>
-   ENVIRONMENT=production
-   PUBLIC_BASE_URL=https://api.yourdomain.com
-   FRONTEND_BASE_URL=https://app.yourdomain.com
-   CORS_ORIGINS=["https://app.yourdomain.com"]
-   POSTGRES_PASSWORD=<something long>
-   ```
-
-3. `docker compose up -d --build`
-4. Put a TLS terminator in front (Caddy is the least work):
-
-   ```
-   api.yourdomain.com {
-       reverse_proxy localhost:8000
-   }
-   app.yourdomain.com {
-       reverse_proxy localhost:5173
-   }
-   ```
-
-5. Back up the database on a schedule. This is the one thing you cannot skip:
-
-   ```bash
-   docker compose exec -T db pg_dump -U emai emai_scheduler | gzip > backup-$(date +%F).sql.gz
-   ```
-
-### Upgrades
+To run the *production* shape locally — one process, one port — build the
+frontend first and the API will serve it:
 
 ```bash
-git pull && docker compose up -d --build
+make build          # writes frontend/dist
+make dev-api        # http://localhost:8000 now serves the app too
 ```
-
-Migrations run automatically on API start (`alembic upgrade head`).
 
 ---
 
-## 3. Managed platforms (Railway / Render / Fly.io)
+## Host it (today)
 
-The two services deploy independently:
+### Render
 
-**API** -- deploy `backend/` as a Docker service.
-- Start command: `alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT`
-- Attach a managed Postgres and set `DATABASE_URL`
-  (`postgresql+psycopg2://...` -- if the platform hands you a `postgres://`
-  URL, rewrite the scheme).
-- Health check path: `/health/ready`
-- Set `SECRET_KEY`, `PUBLIC_BASE_URL`, `FRONTEND_BASE_URL`, `CORS_ORIGINS`.
+The repo has a `render.yaml`. Create a Blueprint from your fork; it provisions
+the web service and a managed Postgres, generates `SECRET_KEY`, and points
+`PUBLIC_BASE_URL` at the service's own URL. Nothing else is required.
 
-**Frontend** -- deploy `frontend/` as a static site.
-- Build: `npm ci && npm run build`, publish directory `dist`
-- Build-time env: `VITE_API_BASE_URL` (and the OAuth client ids if used).
-  These are compiled into the bundle, so changing them requires a rebuild.
-- The host must rewrite unknown paths to `/index.html` (it's a single-page
-  app). `frontend/nginx.conf` does this if you deploy the container instead.
+Seed demo data afterwards from the service's Shell tab: `python -m app.seed`.
+
+### Fly.io
+
+```bash
+fly launch --no-deploy --copy-config
+fly postgres create --name emai-scheduler-db
+fly postgres attach emai-scheduler-db
+fly secrets set SECRET_KEY=$(python3 -c "import secrets; print(secrets.token_urlsafe(48))")
+fly secrets set PUBLIC_BASE_URL=https://<your-app>.fly.dev
+fly deploy
+fly ssh console -C "python -m app.seed"     # optional demo data
+```
+
+### Any Docker host (Railway, Fly, ECS, a VPS)
+
+```bash
+docker build -t emai-scheduler .
+docker run -p 8000:8000 \
+  -e SECRET_KEY=... \
+  -e DATABASE_URL=postgres://user:pass@host:5432/db \
+  -e PUBLIC_BASE_URL=https://sched.your-domain.com \
+  emai-scheduler
+```
+
+`postgres://` and `postgresql://` URLs are both accepted — the app rewrites
+them to the driver SQLAlchemy needs, so a database attached by Render, Fly or
+Heroku works as-is.
+
+### A plain VPS with compose
+
+Point DNS at the box, set `PUBLIC_BASE_URL=https://sched.your-domain.com` in
+`.env`, `docker compose up -d --build`, and put a TLS terminator in front:
+
+```
+sched.your-domain.com {
+    reverse_proxy localhost:8000
+}
+```
+
+Then back up the database on a schedule. This is the one thing you cannot
+skip:
+
+```bash
+docker compose exec -T db pg_dump -U emai emai_scheduler | gzip > backup-$(date +%F).sql.gz
+```
+
+Upgrades are `git pull && docker compose up -d --build`; migrations run
+automatically on start.
+
+---
+
+## Hosting the frontend separately (optional)
+
+If you'd rather put the UI on a CDN, build it with `VITE_API_BASE_URL` set to
+your API origin and deploy `frontend/dist` as a static site (it needs an
+SPA rewrite to `/index.html`; `frontend/Dockerfile` + `frontend/nginx.conf`
+do this if you want it as a container). Then on the API set:
+
+- `CORS_ORIGINS=["https://app.your-domain.com"]`
+- `FRONTEND_BASE_URL=https://app.your-domain.com` (so invite and password
+  reset emails link to the UI rather than the API)
 
 ---
 
 ## Configuration reference
 
-Everything is environment variables; see `.env.example` for the full list.
+Everything is environment variables; `.env.example` has the full list.
 
 | Variable | Required | Notes |
 | --- | --- | --- |
 | `SECRET_KEY` | yes | Signs JWTs. Rotating it signs everyone out. |
-| `DATABASE_URL` | yes in prod | Defaults to a local SQLite file, which is fine for a trial and nothing else. |
-| `PUBLIC_BASE_URL` | yes | Where the API is reachable; used in calendar-feed URLs. |
-| `FRONTEND_BASE_URL` | yes | Where the app is reachable; used in invite/reset email links. |
-| `CORS_ORIGINS` | yes | JSON array. Set it to your app origin in production rather than leaving it open. |
-| `ANTHROPIC_API_KEY` | no | Enables natural-language request parsing and AI schedule summaries. Without it both fall back to deterministic versions. |
-| `GOOGLE_CLIENT_ID` / `MICROSOFT_CLIENT_ID` | no | Enables the matching sign-in button. Must match the frontend build arg. |
+| `DATABASE_URL` | yes in prod | Defaults to a local SQLite file, which is fine for a trial and nothing else. `postgres://` URLs are rewritten automatically. |
+| `PUBLIC_BASE_URL` | yes | The origin users reach. Used for calendar-feed URLs and invite/reset email links. |
+| `CORS_ORIGINS` | no | Leave `[]` for the single-container setup. Only needed when the UI is on another origin. |
+| `FRONTEND_BASE_URL` | no | Only when hosting the UI separately; defaults to `PUBLIC_BASE_URL`. |
+| `STATIC_DIR` | no | Where the built frontend lives. The image sets this; locally it auto-detects `frontend/dist`. Unset with no build present = API only. |
+| `ANTHROPIC_API_KEY` | no | Enables natural-language request parsing and AI schedule summaries; both fall back to deterministic versions without it. |
+| `GOOGLE_CLIENT_ID` / `MICROSOFT_CLIENT_ID` | no | Enables the matching sign-in button. |
 | `SMTP_*`, `EMAIL_FROM_ADDRESS` | no | Without SMTP, invite/reset emails are logged and the invite link is shown in the UI instead. |
 | `RATE_LIMIT_ENABLED` | no | Defaults on. |
 | `LOG_LEVEL` | no | `INFO` by default. |
@@ -115,23 +131,21 @@ Everything is environment variables; see `.env.example` for the full list.
 
 ## Before you take real customer data
 
-These are deliberately listed rather than pretended away.
+Listed rather than pretended away.
 
-- **Set `CORS_ORIGINS` to your actual origin.** The default (`*`) is a dev
-  convenience.
 - **Back up Postgres**, and test a restore at least once.
 - **Configure SMTP**, or invites and password resets only work by copying
   links out of the UI by hand.
-- **Rate limiting is per-process.** Running more than one API worker/replica
-  means the effective limit multiplies; move it to Redis if you scale out.
+- **Rate limiting is per-process.** More than one worker or replica multiplies
+  the effective limit; move it to Redis if you scale out.
 - **Shift times are stored without timezone conversion.** Each site has a
   timezone field, but shift instances are built from naive local times. A
   single-timezone customer is unaffected; a customer spanning timezones needs
   this addressed first.
-- **HIPAA/BAA.** This system stores physician names, emails, credentials and
-  schedules -- staffing data, not patient data (no PHI), which is why it
-  isn't structured as a HIPAA system today. Confirm that boundary before
-  selling into a hospital, because any feature that touches patient volumes
-  or case data changes the answer.
+- **HIPAA/BAA.** This stores physician names, emails, credentials and
+  schedules — staffing data, not patient data (no PHI), which is why it isn't
+  built as a HIPAA system today. Confirm that boundary before selling into a
+  hospital, because any feature touching patient volumes or case data changes
+  the answer.
 - **No per-tenant encryption or data residency controls**, which larger
-  hospital systems will ask about during procurement.
+  hospital systems ask about during procurement.

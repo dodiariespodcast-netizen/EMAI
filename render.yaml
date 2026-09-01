@@ -1,0 +1,53 @@
+# One-click deploy to Render: https://render.com/deploy
+#
+# Creates the app (Docker, single container serving both the API and the UI)
+# plus a managed Postgres. SECRET_KEY is generated for you; nothing else is
+# required to get a working instance.
+#
+# After the first deploy, seed demo data from the service Shell tab:
+#   python -m app.seed
+services:
+  - type: web
+    name: emai-scheduler
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: starter
+    healthCheckPath: /health/ready
+    envVars:
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DATABASE_URL
+        fromDatabase:
+          name: emai-scheduler-db
+          property: connectionString
+      - key: ENVIRONMENT
+        value: production
+      # Render injects RENDER_EXTERNAL_URL; the app reads PUBLIC_BASE_URL for
+      # calendar-feed and invite/reset links, so point one at the other.
+      - key: PUBLIC_BASE_URL
+        fromService:
+          type: web
+          name: emai-scheduler
+          envVarKey: RENDER_EXTERNAL_URL
+      # Same-origin deployment: no cross-origin browser access needed.
+      - key: CORS_ORIGINS
+        value: "[]"
+      # Optional -- set in the dashboard to enable the AI layer, OAuth
+      # sign-in, or outbound email.
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_USERNAME
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: EMAIL_FROM_ADDRESS
+        sync: false
+
+databases:
+  - name: emai-scheduler-db
+    databaseName: emai_scheduler
+    user: emai
+    plan: basic-256mb

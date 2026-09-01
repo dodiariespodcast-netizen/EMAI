@@ -20,6 +20,7 @@ from app.api.routes import (
 )
 from app.config import get_settings
 from app.core.observability import configure_logging, install as install_observability
+from app.core.spa import mount_frontend
 from app.database import engine, init_db
 
 settings = get_settings()
@@ -92,3 +93,9 @@ def readiness() -> JSONResponse:
     except Exception as exc:  # noqa: BLE001 -- report any failure as not-ready
         return JSONResponse(status_code=503, content={"status": "not_ready", "detail": str(exc)})
     return JSONResponse(status_code=200, content={"status": "ready"})
+
+
+# Mounted last on purpose: Starlette matches routes in registration order, so
+# every API route above wins, and only genuinely unmatched paths fall through
+# to the single-page app.
+mount_frontend(app, settings.static_dir)

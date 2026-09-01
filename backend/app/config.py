@@ -1,6 +1,7 @@
 """Application configuration, loaded from environment variables (.env supported)."""
 from functools import lru_cache
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -50,11 +51,40 @@ class Settings(BaseSettings):
     # per-physician ICS calendar feed URL returned by the API.
     public_base_url: str = "http://localhost:8000"
 
-    frontend_base_url: str = "http://localhost:5173"
+    # Where the app is reachable from a browser, used for invite/reset email
+    # links. Leave unset when the API serves the frontend itself -- links then
+    # point at PUBLIC_BASE_URL, which is the same place.
+    frontend_base_url: str | None = None
+
+    # Directory holding the built frontend. Unset auto-detects a sibling
+    # `frontend/dist`; point it somewhere explicit in a container. When there
+    # is no build to serve, the process runs as a plain API.
+    static_dir: str | None = None
 
     # Ops
     log_level: str = "INFO"
     rate_limit_enabled: bool = True
+
+    @field_validator("database_url")
+    @classmethod
+    def _normalize_database_url(cls, value: str) -> str:
+        """Accept the URL shapes hosting providers actually hand out.
+
+        Render, Fly, Heroku and friends set DATABASE_URL to `postgres://...`,
+        which SQLAlchemy 2 rejects outright, and `postgresql://...` without a
+        driver. Rewriting here means an attached database just works instead
+        of failing on first boot with an unhelpful dialect error.
+        """
+        if value.startswith("postgres://"):
+            return "postgresql+psycopg2://" + value[len("postgres://") :]
+        if value.startswith("postgresql://"):
+            return "postgresql+psycopg2://" + value[len("postgresql://") :]
+        return value
+
+    @property
+    def app_base_url(self) -> str:
+        """The origin to build user-facing links from."""
+        return (self.frontend_base_url or self.public_base_url).rstrip("/")
 
 
 @lru_cache
