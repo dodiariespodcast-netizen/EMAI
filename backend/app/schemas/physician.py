@@ -1,5 +1,7 @@
 from pydantic import BaseModel, EmailStr, Field
 
+from app.models.enums import EmploymentType
+
 
 class PhysicianCreate(BaseModel):
     first_name: str
@@ -14,6 +16,8 @@ class PhysicianCreate(BaseModel):
     max_consecutive_shifts: int | None = None
     min_rest_hours: float | None = None
     max_shifts_per_period: int | None = None
+    employment_type: EmploymentType = EmploymentType.EMPLOYED
+    hourly_rate: float | None = Field(default=None, ge=0)
     site_ids: list[str] = Field(default_factory=list)
 
 
@@ -31,6 +35,8 @@ class PhysicianUpdate(BaseModel):
     max_consecutive_shifts: int | None = None
     min_rest_hours: float | None = None
     max_shifts_per_period: int | None = None
+    employment_type: EmploymentType | None = None
+    hourly_rate: float | None = Field(default=None, ge=0)
     site_ids: list[str] | None = None
 
 
@@ -50,6 +56,9 @@ class PhysicianRead(BaseModel):
     max_consecutive_shifts: int | None
     min_rest_hours: float | None
     max_shifts_per_period: int | None
+    employment_type: EmploymentType
+    hourly_rate: float | None
+    calendar_token: str
     site_ids: list[str] = Field(default_factory=list)
 
     model_config = {"from_attributes": True}

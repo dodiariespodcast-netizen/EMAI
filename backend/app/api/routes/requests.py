@@ -16,6 +16,8 @@ from app.schemas.requests import (
     TimeOffRequestUpdate,
 )
 from app.services.ai.request_parser import parse_time_off_text
+from app.services.audit import log_audit
+from app.services.notifications.notify import notify_time_off_status_changed
 
 router = APIRouter(tags=["requests"])
 
@@ -101,8 +103,19 @@ def update_time_off_request_status(
     if req is None:
         raise HTTPException(status_code=404, detail="Request not found")
     req.status = payload.status
+    log_audit(
+        db, current_user.org_id, "time_off_request.status_change", "time_off_request", req.id,
+        user_id=current_user.id, details={"status": payload.status.value},
+    )
     db.commit()
     db.refresh(req)
+
+    physician_user = db.query(User).filter(User.physician_id == req.physician_id).first()
+    if physician_user:
+        physician = db.query(Physician).filter(Physician.id == req.physician_id).first()
+        notify_time_off_status_changed(
+            physician_user.email, f"{physician.first_name} {physician.last_name}", req.start_date, req.end_date, payload.status.value
+        )
     return TimeOffRequestRead.model_validate(req)
 
 

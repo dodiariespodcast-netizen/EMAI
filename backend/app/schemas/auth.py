@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from pydantic import BaseModel, EmailStr, Field
 
 from app.models.enums import UserRole
@@ -39,3 +41,30 @@ class Token(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: UserRead
+
+
+class ChangePassword(BaseModel):
+    current_password: str | None = None  # omit if the account has no password yet (OAuth-only)
+    new_password: str = Field(min_length=8)
+
+
+class OAuthProvider(BaseModel):
+    provider: str = Field(pattern=r"^(google|microsoft)$")
+    id_token: str
+
+
+class OAuthSignup(OAuthProvider):
+    """Creates a new tenant organization whose owner authenticates via an
+    OAuth identity instead of a password."""
+
+    org_name: str = Field(min_length=2, max_length=255)
+    org_slug: str = Field(min_length=2, max_length=100, pattern=r"^[a-z0-9-]+$")
+
+
+class OAuthIdentityRead(BaseModel):
+    id: str
+    provider: str
+    email: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}

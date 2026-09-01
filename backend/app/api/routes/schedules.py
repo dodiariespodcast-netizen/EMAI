@@ -1,9 +1,12 @@
+from collections import defaultdict
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, require_scheduler
 from app.database import get_db
 from app.models.enums import ScheduleRunStatus
+from app.models.physician import Physician
 from app.models.schedule import Assignment, ScheduleRun, SchedulingRule
 from app.models.tenancy import User
 from app.schemas.schedule import (
@@ -16,6 +19,8 @@ from app.schemas.schedule import (
     SchedulingRuleUpdate,
 )
 from app.services.ai.explainer import summarize_schedule_run
+from app.services.audit import log_audit
+from app.services.notifications.notify import notify_schedule_published
 from app.services.scheduling.fairness import build_fairness_report
 from app.services.scheduling.service import get_or_create_rules, generate_schedule
 
@@ -68,6 +73,11 @@ def generate(
         run.ai_summary = summarize_schedule_run(run, fairness)
         db.commit()
         db.refresh(run)
+    log_audit(
+        db, current_user.org_id, "schedule_run.generate", "schedule_run", run.id, user_id=current_user.id,
+        details={"period_start": str(run.period_start), "period_end": str(run.period_end), "unfilled": run.unfilled_shift_count},
+    )
+    db.commit()
     return _to_detail(db, run)
 
 
@@ -95,8 +105,11 @@ def publish_run(
 ) -> ScheduleRunRead:
     run = _get_run_or_404(db, current_user.org_id, run_id)
     run.status = ScheduleRunStatus.PUBLISHED
+    log_audit(db, current_user.org_id, "schedule_run.publish", "schedule_run", run.id, user_id=current_user.id)
     db.commit()
     db.refresh(run)
+
+    _notify_physicians_of_publish(db, run)
     return ScheduleRunRead.model_validate(run)
 
 
@@ -120,3 +133,29 @@ def _to_detail(db: Session, run: ScheduleRun) -> ScheduleRunDetail:
     data = ScheduleRunRead.model_validate(run).model_dump()
     data["assignments"] = [AssignmentRead.model_validate(a) for a in assignments]
     return ScheduleRunDetail(**data)
+
+
+def _notify_physicians_of_publish(db: Session, run: ScheduleRun) -> None:
+    assignments = db.query(Assignment).filter(Assignment.schedule_run_id == run.id).all()
+    shift_count_by_physician: dict[str, int] = defaultdict(int)
+    for a in assignments:
+        shift_count_by_physician[a.physician_id] += 1
+    if not shift_count_by_physician:
+        return
+
+    physicians = {
+        p.id: p
+        for p in db.query(Physician).filter(Physician.id.in_(shift_count_by_physician.keys())).all()
+    }
+    physician_users = {
+        u.physician_id: u
+        for u in db.query(User).filter(User.physician_id.in_(shift_count_by_physician.keys())).all()
+    }
+    for physician_id, count in shift_count_by_physician.items():
+        user = physician_users.get(physician_id)
+        physician = physicians.get(physician_id)
+        if not user or not physician:
+            continue
+        notify_schedule_published(
+            user.email, f"{physician.first_name} {physician.last_name}", run.period_start, run.period_end, count
+        )

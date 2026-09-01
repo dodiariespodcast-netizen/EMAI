@@ -29,6 +29,29 @@ class Settings(BaseSettings):
 
     cors_origins: list[str] = ["*"]
 
+    # OAuth "Sign in with ___" (ID-token flow: the frontend obtains an ID
+    # token from the provider's SDK and hands it to us to verify). Each is
+    # independently optional -- /auth/oauth/* returns a clear error for a
+    # provider whose client id isn't configured rather than failing at import.
+    google_client_id: str | None = None
+    microsoft_client_id: str | None = None
+
+    # Outbound email (optional). Falls back to logging the message instead of
+    # sending when unset, so the app runs without an email provider configured.
+    smtp_host: str | None = None
+    smtp_port: int = 587
+    smtp_username: str | None = None
+    smtp_password: str | None = None
+    smtp_use_tls: bool = True
+    email_from_address: str = "no-reply@emai-scheduler.example.com"
+    email_from_name: str = "EMAI Scheduler"
+
+    # Public base URL of this API, used to build links in emails and the
+    # per-physician ICS calendar feed URL returned by the API.
+    public_base_url: str = "http://localhost:8000"
+
+    frontend_base_url: str = "http://localhost:5173"
+
 
 @lru_cache
 def get_settings() -> Settings:

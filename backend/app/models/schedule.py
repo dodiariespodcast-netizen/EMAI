@@ -4,7 +4,7 @@ from sqlalchemy import JSON, Date, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
-from app.models.enums import AssignmentStatus, ScheduleRunStatus
+from app.models.enums import AssignmentStatus, ScheduleRunStatus, SwapStatus
 from app.models.mixins import TimestampMixin, UUIDPKMixin
 
 
@@ -77,3 +77,22 @@ class Assignment(Base, UUIDPKMixin, TimestampMixin):
     status: Mapped[AssignmentStatus] = mapped_column(default=AssignmentStatus.ASSIGNED)
 
     schedule_run: Mapped["ScheduleRun"] = relationship(back_populates="assignments")
+
+
+class ShiftSwapRequest(Base, UUIDPKMixin, TimestampMixin):
+    """A physician offering one of their assigned shifts to a colleague --
+    either to anyone (open marketplace) or to a specific person -- pending
+    scheduler approval once claimed. This is one of the most-used features
+    of every incumbent scheduling product, because it's how the schedule
+    actually stays correct after publish."""
+
+    __tablename__ = "shift_swap_requests"
+
+    org_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"), index=True, nullable=False)
+    assignment_id: Mapped[str] = mapped_column(ForeignKey("assignments.id"), index=True, nullable=False)
+    offering_physician_id: Mapped[str] = mapped_column(ForeignKey("physicians.id"), index=True, nullable=False)
+    target_physician_id: Mapped[str | None] = mapped_column(ForeignKey("physicians.id"), nullable=True)
+    claimed_by_physician_id: Mapped[str | None] = mapped_column(ForeignKey("physicians.id"), nullable=True)
+    status: Mapped[SwapStatus] = mapped_column(default=SwapStatus.OPEN, index=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    decided_by_user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)

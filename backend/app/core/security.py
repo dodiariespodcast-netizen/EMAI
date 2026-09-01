@@ -14,7 +14,10 @@ def hash_password(password: str) -> str:
     return pwd_context.hash(password)
 
 
-def verify_password(plain_password: str, hashed_password: str) -> bool:
+def verify_password(plain_password: str, hashed_password: str | None) -> bool:
+    if not hashed_password:
+        # OAuth-only accounts have no password hash yet.
+        return False
     return pwd_context.verify(plain_password, hashed_password)
 
 

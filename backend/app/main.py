@@ -3,7 +3,17 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import auth, physicians, requests as requests_routes, schedules, shifts
+from app.api.routes import (
+    audit,
+    auth,
+    calendar_feed,
+    credentials,
+    physicians,
+    requests as requests_routes,
+    schedules,
+    shifts,
+    swaps,
+)
 from app.config import get_settings
 from app.database import init_db
 
@@ -34,7 +44,10 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
-    allow_credentials=True,
+    # Auth is a bearer token in the Authorization header, not a cookie, so
+    # we don't need (and per the CORS spec, can't combine with a wildcard
+    # origin) allow_credentials.
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -44,6 +57,10 @@ app.include_router(physicians.router)
 app.include_router(shifts.router)
 app.include_router(requests_routes.router)
 app.include_router(schedules.router)
+app.include_router(swaps.router)
+app.include_router(credentials.router)
+app.include_router(audit.router)
+app.include_router(calendar_feed.router)
 
 
 @app.get("/health", tags=["health"])

@@ -19,7 +19,14 @@ target_metadata = Base.metadata
 
 def run_migrations_offline() -> None:
     url = config.get_main_option("sqlalchemy.url")
-    context.configure(url=url, target_metadata=target_metadata, literal_binds=True)
+    # SQLite can't ALTER COLUMN/constraints in place; batch mode has Alembic
+    # rebuild the table under the hood instead. Postgres doesn't need it but
+    # tolerates it fine, so we key off the URL rather than maintaining two
+    # migration paths.
+    render_as_batch = url.startswith("sqlite")
+    context.configure(
+        url=url, target_metadata=target_metadata, literal_binds=True, render_as_batch=render_as_batch
+    )
     with context.begin_transaction():
         context.run_migrations()
 
@@ -31,7 +38,10 @@ def run_migrations_online() -> None:
         poolclass=pool.NullPool,
     )
     with connectable.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata)
+        render_as_batch = connection.dialect.name == "sqlite"
+        context.configure(
+            connection=connection, target_metadata=target_metadata, render_as_batch=render_as_batch
+        )
         with context.begin_transaction():
             context.run_migrations()
 
