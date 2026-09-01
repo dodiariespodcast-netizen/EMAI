@@ -1,0 +1,24 @@
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# local sqlite dev databases
+*.db
+*.db-journal
+
+# env files
+.env
+.env.*
+!.env.example
+
+# OS / editor cruft
+.DS_Store
+.idea/
+.vscode/
