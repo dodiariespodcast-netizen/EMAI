@@ -52,6 +52,10 @@ class Settings(BaseSettings):
 
     frontend_base_url: str = "http://localhost:5173"
 
+    # Ops
+    log_level: str = "INFO"
+    rate_limit_enabled: bool = True
+
 
 @lru_cache
 def get_settings() -> Settings:

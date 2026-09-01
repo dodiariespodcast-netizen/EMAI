@@ -1,6 +1,8 @@
+import csv
+import io
 from collections import defaultdict
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, require_scheduler
@@ -8,6 +10,7 @@ from app.database import get_db
 from app.models.enums import ScheduleRunStatus
 from app.models.physician import Physician
 from app.models.schedule import Assignment, ScheduleRun, SchedulingRule
+from app.models.shift import ShiftInstance, ShiftType
 from app.models.tenancy import User
 from app.schemas.schedule import (
     AssignmentRead,
@@ -159,3 +162,47 @@ def _notify_physicians_of_publish(db: Session, run: ScheduleRun) -> None:
         notify_schedule_published(
             user.email, f"{physician.first_name} {physician.last_name}", run.period_start, run.period_end, count
         )
+
+
+@router.get("/schedule-runs/{run_id}/export.csv")
+def export_run_csv(
+    run_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+) -> Response:
+    """The schedule as a CSV grid -- one row per shift, with who's on it.
+    What gets pasted into a group email, posted in the department, or handed
+    to a hospital's own system."""
+    run = _get_run_or_404(db, current_user.org_id, run_id)
+
+    rows = (
+        db.query(ShiftInstance, ShiftType, Assignment, Physician)
+        .join(ShiftType, ShiftInstance.shift_type_id == ShiftType.id)
+        .outerjoin(Assignment, Assignment.shift_instance_id == ShiftInstance.id)
+        .outerjoin(Physician, Assignment.physician_id == Physician.id)
+        .filter(ShiftInstance.schedule_run_id == run.id)
+        .order_by(ShiftInstance.date, ShiftInstance.start_datetime)
+        .all()
+    )
+
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(["Date", "Day", "Shift", "Start", "End", "Category", "Physician", "Status"])
+    for shift, shift_type, assignment, physician in rows:
+        writer.writerow(
+            [
+                shift.date.isoformat(),
+                shift.date.strftime("%a"),
+                shift_type.name,
+                shift.start_datetime.strftime("%H:%M"),
+                shift.end_datetime.strftime("%H:%M"),
+                shift.category.value + (" (holiday)" if shift.is_holiday else ""),
+                f"{physician.first_name} {physician.last_name}" if physician else "UNFILLED",
+                assignment.status.value if assignment else "open",
+            ]
+        )
+
+    filename = f"schedule-{run.period_start}-to-{run.period_end}.csv"
+    return Response(
+        content=buffer.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

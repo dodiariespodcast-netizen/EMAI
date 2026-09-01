@@ -1,8 +1,14 @@
-"""Lightweight conflict check used when approving a shift swap: this is not
-a full re-solve of the schedule, just a targeted check that reassigning one
-shift to the claiming physician wouldn't violate the same hard rules the
-optimizer itself enforces (double-booking/rest, approved time off, site
-eligibility). Cheap enough to run synchronously inside the approval request."""
+"""Targeted conflict check for a single assignment change -- used both when
+approving a shift swap and when a scheduler hand-edits a generated schedule.
+
+This is not a full re-solve. It verifies that giving one shift to one
+physician wouldn't break the same *hard* rules the optimizer enforces
+(double-booking/rest, approved must-off time, site eligibility, active
+roster membership), which is cheap enough to run synchronously inside the
+request. Soft concerns -- fairness, preferences -- are deliberately not
+enforced here: a human overriding the solver is allowed to be unfair, they
+just aren't allowed to be unsafe or illegal.
+"""
 
 from __future__ import annotations
 
@@ -16,19 +22,34 @@ from app.models.requests import TimeOffRequest
 from app.models.schedule import Assignment, SchedulingRule
 from app.models.shift import ShiftInstance
 
+# How far either side of the target date to look for overlapping/insufficient-
+# rest shifts. Three days comfortably covers any rest window a real rule set
+# uses while keeping the query small.
+_CONFLICT_WINDOW_DAYS = 3
 
-def find_swap_conflict(
-    db: Session, org_id: str, shift: ShiftInstance, candidate_physician_id: str, rules: SchedulingRule
+
+def find_assignment_conflict(
+    db: Session,
+    org_id: str,
+    shift: ShiftInstance,
+    candidate_physician_id: str,
+    rules: SchedulingRule,
+    exclude_assignment_id: str | None = None,
 ) -> str | None:
-    """Returns a human-readable reason the swap can't be approved, or None
-    if it's clear."""
+    """Returns a human-readable reason this physician can't take this shift,
+    or None if it's clear.
+
+    `exclude_assignment_id` skips one existing assignment when checking for
+    clashes -- used when reassigning a shift that the physician is already
+    (about to stop) holding.
+    """
     candidate = (
         db.query(Physician)
         .filter(Physician.id == candidate_physician_id, Physician.org_id == org_id)
         .first()
     )
     if candidate is None or not candidate.is_active:
-        return "Claiming physician is not an active member of this organization"
+        return "That physician is not an active member of this organization"
 
     site_restrictions = db.query(PhysicianSite).filter(PhysicianSite.physician_id == candidate.id).count()
     if site_restrictions:
@@ -38,7 +59,16 @@ def find_swap_conflict(
             .first()
         )
         if eligible is None:
-            return "Claiming physician is not credentialed at this site"
+            return f"{candidate.first_name} {candidate.last_name} is not credentialed at this site"
+
+    already_on_this_shift = (
+        db.query(Assignment)
+        .filter(Assignment.shift_instance_id == shift.id, Assignment.physician_id == candidate.id)
+    )
+    if exclude_assignment_id:
+        already_on_this_shift = already_on_this_shift.filter(Assignment.id != exclude_assignment_id)
+    if already_on_this_shift.first() is not None:
+        return f"{candidate.first_name} {candidate.last_name} is already on this shift"
 
     hard_time_off = (
         db.query(TimeOffRequest)
@@ -52,27 +82,35 @@ def find_swap_conflict(
         .first()
     )
     if hard_time_off is not None:
-        return "Claiming physician has approved time off that day"
+        return f"{candidate.first_name} {candidate.last_name} has approved time off that day"
 
     min_rest = candidate.min_rest_hours if candidate.min_rest_hours is not None else rules.min_rest_hours
-    window_start = shift.date - timedelta(days=3)
-    window_end = shift.date + timedelta(days=3)
-    nearby = (
-        db.query(ShiftInstance)
+    nearby_q = (
+        db.query(ShiftInstance, Assignment.id)
         .join(Assignment, Assignment.shift_instance_id == ShiftInstance.id)
         .filter(
             Assignment.physician_id == candidate.id,
-            ShiftInstance.date >= window_start,
-            ShiftInstance.date <= window_end,
+            ShiftInstance.date >= shift.date - timedelta(days=_CONFLICT_WINDOW_DAYS),
+            ShiftInstance.date <= shift.date + timedelta(days=_CONFLICT_WINDOW_DAYS),
             ShiftInstance.id != shift.id,
         )
-        .all()
     )
-    for other in nearby:
+    if exclude_assignment_id:
+        nearby_q = nearby_q.filter(Assignment.id != exclude_assignment_id)
+
+    for other, _assignment_id in nearby_q.all():
         if _conflicts(shift, other, min_rest):
-            return f"Claiming physician already has a conflicting shift on {other.date}"
+            return (
+                f"{candidate.first_name} {candidate.last_name} already has a shift on {other.date} "
+                f"that overlaps or leaves less than {min_rest:g}h rest"
+            )
 
     return None
+
+
+# Kept under its original name for the swap-approval call site, where the
+# wording "swap conflict" is what the caller is actually asking about.
+find_swap_conflict = find_assignment_conflict
 
 
 def _conflicts(a: ShiftInstance, b: ShiftInstance, min_rest_hours: float) -> bool:

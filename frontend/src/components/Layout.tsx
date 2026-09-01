@@ -19,6 +19,7 @@ const NAV: NavItem[] = [
   { to: "/app/shifts", label: "Sites & Shifts", schedulerOnly: true },
   { to: "/app/generate", label: "Generate Schedule", schedulerOnly: true },
   { to: "/app/rules", label: "Scheduling Rules", schedulerOnly: true },
+  { to: "/app/reports", label: "Reports", schedulerOnly: true },
   { to: "/app/users", label: "Users", schedulerOnly: true },
   { to: "/app/audit", label: "Audit Log", schedulerOnly: true },
   { to: "/app/settings", label: "Settings" },

@@ -1,9 +1,19 @@
 import { useAuth, isScheduler } from "../lib/auth";
 import { useFetch } from "../lib/hooks";
 import { api } from "../lib/api";
-import type { Credential, Physician, ShiftSwapRequest, Site, TimeOffRequest } from "../lib/types";
+import type {
+  Credential,
+  Physician,
+  ScheduleRun,
+  ShiftInstance,
+  ShiftSwapRequest,
+  ShiftType,
+  Site,
+  TimeOffRequest,
+} from "../lib/types";
 import { Card, CardHeader, PageHeader, StatCard, Badge, EmptyState } from "../components/ui";
 import { Link } from "react-router-dom";
+import { SetupChecklist } from "../components/SetupChecklist";
 
 export function DashboardPage() {
   const { user } = useAuth();
@@ -94,9 +104,29 @@ function AdminPanel() {
   const expiring = useFetch(() => api.get<Credential[]>("/credentials/expiring", { within_days: 60 }), []);
   const pending = useFetch(() => api.get<TimeOffRequest[]>("/time-off-requests", { status_filter: "pending" }), []);
   const openSwaps = useFetch(() => api.get<ShiftSwapRequest[]>("/shift-swaps", { status_filter: "open" }), []);
+  const shiftTypes = useFetch(() => api.get<ShiftType[]>("/shift-types"), []);
+  const shiftInstances = useFetch(() => api.get<ShiftInstance[]>("/shift-instances"), []);
+  const runs = useFetch(() => api.get<ScheduleRun[]>("/schedule-runs"), []);
+
+  // Everything the checklist keys off has to have loaded before we can say
+  // whether a step is done -- otherwise it flashes "nothing set up yet" on
+  // every refresh for a group that's fully configured.
+  const setupLoaded =
+    !sites.loading && !shiftTypes.loading && !shiftInstances.loading && !physicians.loading && !runs.loading;
 
   return (
     <section>
+      {setupLoaded && (
+        <div className="mb-6">
+          <SetupChecklist
+            sites={sites.data ?? []}
+            shiftTypes={shiftTypes.data ?? []}
+            shiftInstances={shiftInstances.data ?? []}
+            physicians={physicians.data ?? []}
+            runs={runs.data ?? []}
+          />
+        </div>
+      )}
       <h2 className="mb-3 text-sm font-semibold text-slate-500">Organization overview</h2>
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
         <StatCard label="Active physicians" value={physicians.data?.length ?? "—"} />

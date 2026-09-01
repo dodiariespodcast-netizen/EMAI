@@ -218,3 +218,67 @@ export interface AuditLogEntry {
   details: Record<string, unknown>;
   created_at: string;
 }
+
+export interface InviteLink {
+  user_id: string;
+  email: string;
+  invite_url: string;
+  expires_in_hours: number;
+  email_sent: boolean;
+}
+
+export interface EligiblePhysician {
+  physician_id: string;
+  name: string;
+  employment_type: EmploymentType;
+  conflict: string | null;
+  assigned_shifts_in_period: number;
+}
+
+export interface HoursRow {
+  physician_id: string;
+  physician_name: string;
+  employment_type: EmploymentType;
+  shifts: number;
+  hours: number;
+  night_hours: number;
+  weekend_hours: number;
+  holiday_hours: number;
+  hourly_rate: number | null;
+  estimated_cost: number | null;
+}
+
+export interface HoursReport {
+  period_start: string;
+  period_end: string;
+  rows: HoursRow[];
+  total_shifts: number;
+  total_hours: number;
+  total_estimated_cost: number;
+  physicians_missing_rate: string[];
+}
+
+export interface CoverageGap {
+  shift_instance_id: string;
+  date: string;
+  shift_type: string;
+  category: string;
+  short_by: number;
+}
+
+export interface CoverageReport {
+  period_start: string;
+  period_end: string;
+  required_slots: number;
+  staffed_slots: number;
+  coverage_rate: number;
+  gaps: CoverageGap[];
+}
+
+export interface PhysicianImportResult {
+  dry_run: boolean;
+  created_count: number;
+  created_emails: string[];
+  error_count: number;
+  errors: { line: number; error: string }[];
+}

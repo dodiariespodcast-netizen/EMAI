@@ -6,7 +6,14 @@ from app.models.physician import Credential, Physician, PhysicianSite
 from app.models.requests import ShiftPreference, TimeOffRequest
 from app.models.schedule import Assignment, ScheduleRun, SchedulingRule, ShiftSwapRequest
 from app.models.shift import ShiftInstance, ShiftType
-from app.models.tenancy import AuditLog, OAuthIdentity, Organization, Site, User
+from app.models.tenancy import (
+    AuditLog,
+    OAuthIdentity,
+    Organization,
+    PasswordResetToken,
+    Site,
+    User,
+)
 
 __all__ = [
     "Organization",
@@ -14,6 +21,7 @@ __all__ = [
     "User",
     "OAuthIdentity",
     "AuditLog",
+    "PasswordResetToken",
     "Physician",
     "PhysicianSite",
     "Credential",

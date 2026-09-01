@@ -42,17 +42,36 @@ scheduling" that is actually a reliable, auditable optimizer with an LLM
 concierge layer, not a black box making unaccountable calls about who
 works nights.
 
+## Try it in five minutes
+
+```bash
+cp .env.example .env
+python3 -c "import secrets; print(secrets.token_urlsafe(48))"   # paste into SECRET_KEY
+docker compose up --build
+docker compose run --rm api python -m app.seed                  # demo data
+```
+
+Then open **http://localhost:5173** and sign in as
+`admin@demo-em.example.com` / `demo1234`.
+
+The seed builds a realistic 14-physician group across two sites -- day, swing
+and night coverage for four weeks, a mix of employed and locums physicians,
+credentials (some expiring), pending and approved time-off requests -- and
+runs the optimizer over it, so every screen has real data on it from the
+first click. It also prints physician logins so you can see the
+self-service side.
+
+Without Docker: `make setup && make seed`, then `make dev-api` and
+`make dev-web` in two terminals. `make help` lists everything else.
+
+Deploying for real is covered in **[DEPLOYMENT.md](DEPLOYMENT.md)**.
+
 ## What's in the repo
 
 ```
 backend/    FastAPI + PostgreSQL/SQLite + OR-Tools CP-SAT + Claude
 frontend/   React + TypeScript + Tailwind SPA that talks to the API
 ```
-
-Both are documented in more depth in their own directories
-(`backend/README` is this file; the frontend has inline comments and
-`frontend/scripts/e2e-smoke.mjs` as a runnable example of the full
-product flow). The short version of each follows.
 
 ## Backend
 
@@ -82,8 +101,14 @@ backend/
       notifications/
         email.py, notify.py  SMTP email, no-op-logs if unconfigured
       audit.py             Append-only audit log helper
+      auth/
+        password_reset.py    Hashed, single-use invite/reset tokens
+    seed.py              Demo-organization loader (`python -m app.seed`)
+    core/
+      rate_limit.py        Throttles sign-in and email-sending endpoints
+      observability.py     Request ids, structured logs, error envelope
   alembic/            DB migrations
-  tests/              pytest: solver unit tests + full API workflow tests (31)
+  tests/              pytest: solver unit tests + full API workflow tests (62)
 ```
 
 **Multi-tenant from day one**: every table carries `org_id`; a signup
@@ -130,6 +155,27 @@ rationale on every constraint.
   buyer's procurement checklist.
 - **Calendar feed**: a token-secured per-physician `.ics` URL, subscribable
   from any phone's calendar app, showing published shifts.
+- **Accounts that don't need a human in the loop**: admins invite by email
+  and the user sets their own password from a single-use link (no temporary
+  passwords passed around); "forgot password" works the same way. Reset
+  requests deliberately return the same response whether or not the email
+  exists, so the endpoint can't be used to discover who has an account.
+- **Manual overrides**: a scheduler can assign, reassign or unassign any
+  shift by hand. Overrides run the same hard-rule check the solver does and
+  are refused unless explicitly forced -- and a forced override records what
+  rule it broke, and why, in the audit log. No scheduling product survives
+  contact with reality without this.
+- **Reports and exports**: hours and estimated cost per physician for a pay
+  period (the billing basis for an agency, payroll for a group), a coverage
+  report listing exactly which shifts are still short, plus CSV exports of
+  both and of any schedule.
+- **Bulk roster import**: onboard a 40-physician group from a CSV, with a
+  dry-run mode that validates the file first and reports bad rows by line
+  number instead of failing the whole import.
+- **Production basics**: rate limiting on sign-in and email endpoints,
+  request ids on every response and log line, a `/health/ready` probe that
+  actually checks the database, and an error envelope that hands back a
+  traceable id instead of a stack trace.
 
 ### Running it
 
@@ -149,7 +195,7 @@ Docs at `http://localhost:8000/docs`. Or via Docker (Postgres included):
 docker compose up --build
 ```
 
-Run the test suite (31 tests):
+Run the test suite (62 tests):
 
 ```bash
 pytest -v
@@ -183,6 +229,12 @@ enable outbound email, set the `SMTP_*` variables.
    email.
 9. `POST /shift-swaps`, `.../claim`, `.../approve` — the swap marketplace.
 10. `POST /credentials`, `GET /credentials/expiring` — compliance tracking.
+11. `POST /assignments`, `PATCH`/`DELETE /assignments/{id}` — hand-edit the
+    schedule; `GET /shift-instances/{id}/eligible-physicians` says who can
+    take a shift and why anyone can't.
+12. `GET /reports/hours`, `/reports/coverage`, `/reports/hours.csv`,
+    `GET /schedule-runs/{id}/export.csv` — reporting and exports.
+13. `POST /physicians/import` — bulk roster CSV (`?dry_run=true` to validate).
 
 `PATCH /scheduling-rules` exposes the objective weights (fairness vs.
 preference vs. seniority vs. unfilled-shift penalty) as a per-org dial —
@@ -200,11 +252,15 @@ the whole backend surface with role-aware views:
   requests (free-text or a form), standing + time-scoped shift
   preferences, the shift swap marketplace, and their own compliance
   record.
-- **Scheduler/admin views**: roster management, sites & shift types,
-  bulk shift-instance generation, schedule generation with live solver
-  stats/AI summary/fairness table and a publish button, scheduling-rule
-  weight dials, request and swap approvals, an org-wide compliance
-  dashboard, user invitations/roles, and the audit log.
+- **Scheduler/admin views**: a first-run setup checklist that walks a new
+  group through the dependency order (site → shift types → roster → coverage
+  → schedule) and disappears once they're set up; roster management with CSV
+  import; sites & shift types; bulk shift-instance generation; schedule
+  generation with live solver stats, AI summary, fairness table, CSV export
+  and publish; **click-any-shift editing** on the calendar, showing who can
+  cover it and why anyone can't; scheduling-rule weight dials; request and
+  swap approvals; an org-wide compliance dashboard; an hours/cost and
+  coverage report; user invitations and roles; and the audit log.
 
 ### Running it
 
@@ -290,7 +346,22 @@ product already fits that model without changes to the core:
   integrations can all be built on top without touching the engine).
 - **What's next toward launch**: Stripe usage-based billing hung off the
   existing `Organization.plan_tier` field, SSO/SAML for larger hospital
-  systems, mobile push notifications alongside email, a
-  credentialing-expiration email digest (cron job over the existing
-  `/credentials/expiring` endpoint), and payroll/timesheet export using
-  the `hourly_rate` + published-assignment data that's already tracked.
+  systems, mobile push alongside email, a cron job emailing the
+  credential-expiry digest the `/credentials/expiring` endpoint already
+  computes, and timezone-correct shift times (see the caveats in
+  [DEPLOYMENT.md](DEPLOYMENT.md)) before selling into a multi-timezone
+  customer.
+
+## Verification
+
+- **62 backend tests** (`make test`) covering the solver in isolation, the
+  full API surface, auth/OAuth/reset flows, manual overrides, reports,
+  imports, rate limiting, and the demo seed.
+- **A 24-step end-to-end browser test** (`frontend/scripts/e2e-smoke.mjs`)
+  that drives a real browser against a real backend through the whole
+  product: signup → sites → shift types → coverage → roster → CSV import →
+  optimizer run → publish → hand-editing shifts on the calendar → reports →
+  inviting a user → that user setting their own password from the invite
+  link → physician self-service, asserting zero console errors throughout.
+- **CI** (`.github/workflows/ci.yml`) runs all of the above on every push,
+  plus a migration up/down check and a lint/typecheck/build of the frontend.

@@ -65,3 +65,30 @@ def notify_credential_expiring(email: str, name: str, credential_type: str, expi
             "-- EMAI Scheduler"
         ),
     )
+
+
+def notify_password_reset(email: str, link: str) -> None:
+    send_email(
+        to=email,
+        subject="Reset your EMAI Scheduler password",
+        body=(
+            "Someone (hopefully you) asked to reset the password on this account.\n\n"
+            f"Set a new password here -- the link expires in 2 hours:\n{link}\n\n"
+            "If you didn't request this, you can ignore this email; nothing has changed.\n\n"
+            "-- EMAI Scheduler"
+        ),
+    )
+
+
+def notify_invite(email: str, org_name: str, link: str) -> None:
+    send_email(
+        to=email,
+        subject=f"You've been added to {org_name} on EMAI Scheduler",
+        body=(
+            f"You've been added to {org_name}'s schedule.\n\n"
+            f"Set your password and sign in here -- the link expires in 72 hours:\n{link}\n\n"
+            "Once you're in you can see your shifts, request time off, set your "
+            "night/weekend preferences, and pick up or hand off shifts.\n\n"
+            "-- EMAI Scheduler"
+        ),
+    )

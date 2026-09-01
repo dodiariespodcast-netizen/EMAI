@@ -4,6 +4,8 @@ import { ProtectedRoute, RequireScheduler } from "./components/ProtectedRoute";
 import { Layout } from "./components/Layout";
 import { LoginPage } from "./pages/LoginPage";
 import { SignupPage } from "./pages/SignupPage";
+import { ForgotPasswordPage } from "./pages/ForgotPasswordPage";
+import { SetPasswordPage } from "./pages/SetPasswordPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { SchedulePage } from "./pages/SchedulePage";
 import { RequestsPage } from "./pages/RequestsPage";
@@ -16,6 +18,7 @@ import { GeneratePage } from "./pages/GeneratePage";
 import { RulesPage } from "./pages/RulesPage";
 import { UsersPage } from "./pages/UsersPage";
 import { AuditLogPage } from "./pages/AuditLogPage";
+import { ReportsPage } from "./pages/ReportsPage";
 import { SettingsPage } from "./pages/SettingsPage";
 
 export default function App() {
@@ -25,6 +28,9 @@ export default function App() {
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/signup" element={<SignupPage />} />
+          <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+          <Route path="/reset-password" element={<SetPasswordPage mode="reset" />} />
+          <Route path="/set-password" element={<SetPasswordPage mode="invite" />} />
 
           <Route
             path="/app"
@@ -79,6 +85,14 @@ export default function App() {
               element={
                 <RequireScheduler>
                   <UsersPage />
+                </RequireScheduler>
+              }
+            />
+            <Route
+              path="reports"
+              element={
+                <RequireScheduler>
+                  <ReportsPage />
                 </RequireScheduler>
               }
             />

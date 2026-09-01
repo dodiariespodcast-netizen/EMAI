@@ -2,6 +2,8 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from sqlalchemy import text
 
 from app.api.routes import (
     assignments,
@@ -10,15 +12,20 @@ from app.api.routes import (
     calendar_feed,
     credentials,
     physicians,
+    reports,
     requests as requests_routes,
     schedules,
     shifts,
     swaps,
 )
 from app.config import get_settings
-from app.database import init_db
+from app.core.observability import configure_logging, install as install_observability
+from app.database import engine, init_db
 
 settings = get_settings()
+
+
+configure_logging(settings.log_level)
 
 
 @asynccontextmanager
@@ -42,6 +49,8 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+install_observability(app)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
@@ -61,10 +70,25 @@ app.include_router(schedules.router)
 app.include_router(assignments.router)
 app.include_router(swaps.router)
 app.include_router(credentials.router)
+app.include_router(reports.router)
 app.include_router(audit.router)
 app.include_router(calendar_feed.router)
 
 
 @app.get("/health", tags=["health"])
 def health() -> dict:
-    return {"status": "ok", "app": settings.app_name}
+    """Liveness: the process is up. Deliberately touches nothing else, so a
+    database blip doesn't get the container killed and restarted."""
+    return {"status": "ok", "app": settings.app_name, "version": app.version}
+
+
+@app.get("/health/ready", tags=["health"])
+def readiness() -> JSONResponse:
+    """Readiness: the process can actually serve traffic, i.e. the database
+    answers. This is what a load balancer should gate on."""
+    try:
+        with engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
+    except Exception as exc:  # noqa: BLE001 -- report any failure as not-ready
+        return JSONResponse(status_code=503, content={"status": "not_ready", "detail": str(exc)})
+    return JSONResponse(status_code=200, content={"status": "ready"})

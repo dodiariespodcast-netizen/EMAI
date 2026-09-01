@@ -64,6 +64,26 @@ class AssignmentDetail(AssignmentRead):
     shift_type_name: str
 
 
+class AssignmentCreate(BaseModel):
+    """Manually place a physician on a shift, overriding/supplementing what
+    the solver produced."""
+
+    shift_instance_id: str
+    physician_id: str
+    # Set to bypass the hard-rule conflict check. The override reason is
+    # recorded in the audit log -- some real-world exceptions are legitimate
+    # (a physician volunteered, a rule doesn't apply that week), but they
+    # should never happen silently.
+    force: bool = False
+    override_reason: str | None = None
+
+
+class AssignmentReassign(BaseModel):
+    physician_id: str
+    force: bool = False
+    override_reason: str | None = None
+
+
 class ScheduleRunRead(BaseModel):
     id: str
     org_id: str

@@ -7,6 +7,9 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 os.environ.setdefault("SECRET_KEY", "test-secret")
+# The suite logs in far more often than a person would; leave the limiter off
+# by default and exercise it explicitly in test_rate_limit.py.
+os.environ.setdefault("RATE_LIMIT_ENABLED", "false")
 
 
 @pytest.fixture()

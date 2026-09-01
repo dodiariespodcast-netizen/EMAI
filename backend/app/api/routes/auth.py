@@ -3,16 +3,20 @@ from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, require_scheduler
+from app.core.rate_limit import limit_email, limit_login
 from app.core.security import create_access_token, hash_password, verify_password
 from app.database import get_db
 from app.models.enums import UserRole
 from app.models.tenancy import OAuthIdentity, Organization, User
 from app.schemas.auth import (
     ChangePassword,
+    InviteLinkRead,
     OAuthIdentityRead,
     OAuthProvider,
     OAuthSignup,
     OrgSignup,
+    PasswordResetConfirm,
+    PasswordResetRequest,
     Token,
     UserCreate,
     UserRead,
@@ -20,6 +24,14 @@ from app.schemas.auth import (
 )
 from app.services.audit import log_audit
 from app.services.auth.oauth import OAuthVerificationError, verify_id_token
+from app.services.auth.password_reset import (
+    INVITE_TTL_HOURS,
+    RESET_TTL_HOURS,
+    build_link,
+    consume_token,
+    issue_token,
+)
+from app.services.notifications.notify import notify_invite, notify_password_reset
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -56,7 +68,11 @@ def signup(payload: OrgSignup, db: Session = Depends(get_db)) -> Token:
 
 
 @router.post("/login", response_model=Token)
-def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)) -> Token:
+def login(
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    db: Session = Depends(get_db),
+    _rate_limit: None = Depends(limit_login),
+) -> Token:
     user = db.query(User).filter(User.email == form_data.username).first()
     if not user or not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Incorrect email or password")
@@ -82,30 +98,115 @@ def change_password(
     return UserRead.model_validate(current_user)
 
 
-@router.post("/users", response_model=UserRead, status_code=status.HTTP_201_CREATED)
+@router.post("/users", response_model=InviteLinkRead, status_code=status.HTTP_201_CREATED)
 def create_user(
     payload: UserCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_scheduler),
-) -> UserRead:
+) -> InviteLinkRead:
+    """Adds a user to the org. With no password supplied (the normal path) the
+    account is created password-less and the user gets an invite link to set
+    their own; the link is also returned so an admin can pass it along by hand
+    when email isn't configured yet."""
     if db.query(User).filter(User.email == payload.email).first():
         raise HTTPException(status_code=400, detail="Email already registered")
     user = User(
         org_id=current_user.org_id,
         email=payload.email,
-        hashed_password=hash_password(payload.password),
+        hashed_password=hash_password(payload.password) if payload.password else None,
         role=payload.role,
         physician_id=payload.physician_id,
     )
     db.add(user)
     db.flush()
+
+    token = issue_token(db, user, purpose="invite")
+    link = build_link(token, purpose="invite")
     log_audit(
         db, current_user.org_id, "user.invite", "user", user.id, user_id=current_user.id,
         details={"email": payload.email, "role": payload.role.value},
     )
     db.commit()
     db.refresh(user)
-    return UserRead.model_validate(user)
+
+    org = db.query(Organization).filter(Organization.id == current_user.org_id).first()
+    email_sent = False
+    if not payload.password:
+        notify_invite(user.email, org.name if org else "your group", link)
+        email_sent = True
+
+    return InviteLinkRead(
+        user_id=user.id,
+        email=user.email,
+        invite_url=link,
+        expires_in_hours=INVITE_TTL_HOURS,
+        email_sent=email_sent,
+    )
+
+
+@router.post("/users/{user_id}/invite", response_model=InviteLinkRead)
+def resend_invite(
+    user_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_scheduler),
+) -> InviteLinkRead:
+    """Re-issues a set-your-password link for a user who never used (or lost)
+    the first one. Invalidates the previous link."""
+    user = db.query(User).filter(User.id == user_id, User.org_id == current_user.org_id).first()
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    token = issue_token(db, user, purpose="invite")
+    link = build_link(token, purpose="invite")
+    log_audit(db, current_user.org_id, "user.invite_resend", "user", user.id, user_id=current_user.id)
+    db.commit()
+
+    org = db.query(Organization).filter(Organization.id == current_user.org_id).first()
+    notify_invite(user.email, org.name if org else "your group", link)
+    return InviteLinkRead(
+        user_id=user.id, email=user.email, invite_url=link, expires_in_hours=INVITE_TTL_HOURS, email_sent=True
+    )
+
+
+@router.post("/password-reset/request", status_code=status.HTTP_202_ACCEPTED)
+def request_password_reset(
+    payload: PasswordResetRequest,
+    db: Session = Depends(get_db),
+    _rate_limit: None = Depends(limit_email),
+) -> dict:
+    """Always reports success, whether or not the email exists -- otherwise
+    this endpoint becomes a way to enumerate who has an account."""
+    user = db.query(User).filter(User.email == payload.email).first()
+    if user is not None and user.is_active:
+        token = issue_token(db, user, purpose="reset")
+        db.commit()
+        notify_password_reset(user.email, build_link(token, purpose="reset"))
+    return {
+        "status": "ok",
+        "detail": "If that email has an account, a reset link is on its way.",
+        "expires_in_hours": RESET_TTL_HOURS,
+    }
+
+
+@router.post("/password-reset/confirm", response_model=Token)
+def confirm_password_reset(
+    payload: PasswordResetConfirm,
+    db: Session = Depends(get_db),
+    _rate_limit: None = Depends(limit_login),
+) -> Token:
+    """Consumes a reset/invite token and sets the new password, then signs the
+    user straight in so they aren't bounced back to a login screen."""
+    user = consume_token(db, payload.token)
+    if user is None:
+        raise HTTPException(status_code=400, detail="That link is invalid or has expired")
+    if not user.is_active:
+        raise HTTPException(status_code=403, detail="User is disabled")
+
+    user.hashed_password = hash_password(payload.new_password)
+    log_audit(db, user.org_id, "user.password_reset", "user", user.id, user_id=user.id)
+    db.commit()
+    db.refresh(user)
+    return _issue_token(user)
 
 
 @router.get("/users", response_model=list[UserRead])
@@ -173,7 +274,11 @@ def oauth_signup(payload: OAuthSignup, db: Session = Depends(get_db)) -> Token:
 
 
 @router.post("/oauth/login", response_model=Token)
-def oauth_login(payload: OAuthProvider, db: Session = Depends(get_db)) -> Token:
+def oauth_login(
+    payload: OAuthProvider,
+    db: Session = Depends(get_db),
+    _rate_limit: None = Depends(limit_login),
+) -> Token:
     """Signs in an existing user via a linked OAuth identity, or -- on
     first use, if a verified-email match exists (e.g. an admin invited them
     by email and they've never logged in with a password) -- auto-links

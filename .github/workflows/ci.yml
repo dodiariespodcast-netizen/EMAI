@@ -1,0 +1,122 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  backend:
+    name: Backend tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+
+      - name: Install dependencies
+        working-directory: backend
+        run: pip install -r requirements-dev.txt
+
+      - name: Run tests
+        working-directory: backend
+        env:
+          SECRET_KEY: ci-secret-not-used-outside-tests
+        run: pytest -q
+
+      - name: Verify migrations apply and roll back cleanly
+        working-directory: backend
+        env:
+          SECRET_KEY: ci-secret-not-used-outside-tests
+          DATABASE_URL: sqlite:///./ci-migration-check.db
+        run: |
+          alembic upgrade head
+          alembic downgrade base
+
+      - name: Verify the demo seed still produces a solvable schedule
+        working-directory: backend
+        env:
+          SECRET_KEY: ci-secret-not-used-outside-tests
+          DATABASE_URL: sqlite:///./ci-seed-check.db
+        run: python -m app.seed
+
+  frontend:
+    name: Frontend build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Lint
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Typecheck and build
+        working-directory: frontend
+        run: npm run build
+
+  e2e:
+    name: End-to-end smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install backend
+        working-directory: backend
+        run: pip install -r requirements.txt
+
+      - name: Start the API
+        working-directory: backend
+        env:
+          SECRET_KEY: ci-secret-not-used-outside-tests
+          DATABASE_URL: sqlite:///./e2e.db
+          RATE_LIMIT_ENABLED: "false"
+        run: |
+          uvicorn app.main:app --port 8000 &
+          for _ in $(seq 1 30); do
+            curl -sf http://localhost:8000/health >/dev/null && break
+            sleep 1
+          done
+
+      - name: Build and serve the frontend
+        working-directory: frontend
+        env:
+          VITE_API_BASE_URL: http://localhost:8000
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+          npm run build
+          npx vite preview --port 4173 --strictPort &
+          for _ in $(seq 1 30); do
+            curl -sf http://localhost:4173/ >/dev/null && break
+            sleep 1
+          done
+
+      - name: Run the smoke test
+        working-directory: frontend
+        env:
+          SMOKE_BASE_URL: http://localhost:4173
+          # Use the Chromium that `playwright install` just placed, rather than
+          # the sandbox-specific path the script defaults to.
+          PLAYWRIGHT_CHROMIUM_PATH: ""
+        run: node scripts/e2e-smoke.mjs

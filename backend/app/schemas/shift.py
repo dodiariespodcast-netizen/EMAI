@@ -74,3 +74,16 @@ class ShiftInstanceRead(BaseModel):
     is_holiday: bool
 
     model_config = {"from_attributes": True}
+
+
+class EligiblePhysician(BaseModel):
+    """One candidate for an open shift, with the reason they can't take it
+    when that's the case -- the picker shows conflicted physicians greyed out
+    with the reason rather than hiding them, since a scheduler sometimes needs
+    to override anyway."""
+
+    physician_id: str
+    name: str
+    employment_type: str
+    conflict: str | None = None
+    assigned_shifts_in_period: int = 0

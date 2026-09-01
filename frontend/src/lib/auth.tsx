@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import { api, setAuthToken } from "./api";
+import { api, ApiError, setAuthToken } from "./api";
 import type { Token, User } from "./types";
 
 const STORAGE_KEY = "emai.auth.token";
@@ -19,6 +19,13 @@ interface AuthContextValue {
   ) => Promise<void>;
   logout: () => void;
   refreshMe: () => Promise<void>;
+  /** Set when a stored session exists but we couldn't reach the API to
+   * verify it -- distinct from "not signed in". */
+  connectionError: boolean;
+  retryBootstrap: () => void;
+  /** Adopt a session handed back by an endpoint that authenticates on our
+   * behalf (password reset / invite confirmation), rather than logging in. */
+  adoptSession: (token: Token) => void;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -27,6 +34,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [connectionError, setConnectionError] = useState(false);
+  const [bootstrapAttempt, setBootstrapAttempt] = useState(0);
 
   function applySession(result: Token) {
     localStorage.setItem(STORAGE_KEY, result.access_token);
@@ -43,16 +52,39 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     setAuthToken(stored);
     setToken(stored);
+    setConnectionError(false);
+
+    let cancelled = false;
     api
       .get<User>("/auth/me")
-      .then(setUser)
-      .catch(() => {
-        localStorage.removeItem(STORAGE_KEY);
-        setAuthToken(null);
-        setToken(null);
+      .then((me) => {
+        if (!cancelled) setUser(me);
       })
-      .finally(() => setLoading(false));
-  }, []);
+      .catch((err) => {
+        if (cancelled) return;
+        // Only a definitive rejection from the server means the session is
+        // dead. Anything else -- the API being briefly unreachable, a request
+        // aborted by navigation, a laptop waking up -- must NOT throw away a
+        // valid session, or the app appears to sign people out at random.
+        const rejected = err instanceof ApiError && (err.status === 401 || err.status === 403);
+        if (rejected) {
+          localStorage.removeItem(STORAGE_KEY);
+          setAuthToken(null);
+          setToken(null);
+        } else {
+          setConnectionError(true);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      // A navigation away mid-flight aborts the request; don't let that
+      // resolution touch state for a page that's already gone.
+      cancelled = true;
+    };
+  }, [bootstrapAttempt]);
 
   const value = useMemo<AuthContextValue>(
     () => ({
@@ -60,6 +92,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       token,
       loading,
       async login(email, password) {
+        setConnectionError(false);
         const form = new URLSearchParams();
         form.set("username", email);
         form.set("password", password);
@@ -93,13 +126,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setAuthToken(null);
         setToken(null);
         setUser(null);
+        setConnectionError(false);
       },
       async refreshMe() {
         const me = await api.get<User>("/auth/me");
         setUser(me);
       },
+      adoptSession(result) {
+        applySession(result);
+      },
+      connectionError,
+      retryBootstrap() {
+        setLoading(true);
+        setBootstrapAttempt((n) => n + 1);
+      },
     }),
-    [user, token, loading],
+    [user, token, loading, connectionError],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

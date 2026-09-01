@@ -1,15 +1,18 @@
 import { useMemo, useState } from "react";
-import { useAuth } from "../lib/auth";
+import { useAuth, isScheduler } from "../lib/auth";
 import { useFetch } from "../lib/hooks";
 import { api } from "../lib/api";
 import type { Assignment, Physician, ScheduleRun, ShiftInstance, ShiftType, Site } from "../lib/types";
 import { addMonths, buildMonthGrid, endOfMonth, monthLabel, startOfMonth, toIsoDate } from "../lib/calendar";
-import { Badge, Card, PageHeader, Select, Spinner } from "../components/ui";
+import { Card, PageHeader, Select, Spinner } from "../components/ui";
+import { ShiftEditorPanel } from "../components/ShiftEditorPanel";
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 export function SchedulePage() {
   const { user } = useAuth();
+  const scheduler = isScheduler(user);
+  const [editingShiftId, setEditingShiftId] = useState<string | null>(null);
   const sites = useFetch(() => api.get<Site[]>("/sites"), []);
   const [siteId, setSiteId] = useState<string>("");
   const [month, setMonth] = useState(() => startOfMonth(new Date()));
@@ -36,19 +39,27 @@ export function SchedulePage() {
   );
   const physicians = useFetch(() => api.get<Physician[]>("/physicians"), []);
 
-  const publishedRunIds = useMemo(
+  // Physicians only ever see published schedules; schedulers also see drafts,
+  // since reviewing and fixing a draft before publishing is the job.
+  const visibleRunIds = useMemo(
     () =>
       (runs.data ?? [])
-        .filter((r) => r.status === "published" && r.period_start <= monthEnd && r.period_end >= monthStart)
+        .filter(
+          (r) =>
+            (scheduler || r.status === "published") &&
+            r.status !== "archived" &&
+            r.period_start <= monthEnd &&
+            r.period_end >= monthStart,
+        )
         .map((r) => r.id),
-    [runs.data, monthStart, monthEnd],
+    [runs.data, monthStart, monthEnd, scheduler],
   );
 
   const assignments = useFetch(async () => {
-    if (publishedRunIds.length === 0) return [] as Assignment[];
-    const details = await Promise.all(publishedRunIds.map((id) => api.get<{ assignments: Assignment[] }>(`/schedule-runs/${id}`)));
+    if (visibleRunIds.length === 0) return [] as Assignment[];
+    const details = await Promise.all(visibleRunIds.map((id) => api.get<{ assignments: Assignment[] }>(`/schedule-runs/${id}`)));
     return details.flatMap((d) => d.assignments);
-  }, [publishedRunIds.join(",")]);
+  }, [visibleRunIds.join(",")]);
 
   const physicianById = useMemo(() => new Map((physicians.data ?? []).map((p) => [p.id, p])), [physicians.data]);
   const shiftTypeById = useMemo(() => new Map((shiftTypes.data ?? []).map((s) => [s.id, s])), [shiftTypes.data]);
@@ -72,6 +83,7 @@ export function SchedulePage() {
   }, [shiftInstances.data]);
 
   const grid = useMemo(() => buildMonthGrid(month), [month]);
+  const editingShift = (shiftInstances.data ?? []).find((s) => s.id === editingShiftId);
   const loading = shiftInstances.loading || runs.loading || assignments.loading;
 
   return (
@@ -145,23 +157,31 @@ export function SchedulePage() {
                       ? shiftAssignments.filter((a) => a.physician_id === user?.physician_id)
                       : shiftAssignments;
                     if (onlyMine && visible.length === 0) return null;
+                    const short = instance.required_physicians - shiftAssignments.length;
                     return (
-                      <div key={instance.id} className="rounded-md bg-brand-50 px-1.5 py-1 text-[11px] leading-tight">
-                        <p className="font-medium text-brand-700">{shiftType?.name ?? instance.category}</p>
-                        {visible.length > 0 ? (
-                          visible.map((a) => {
-                            const p = physicianById.get(a.physician_id);
-                            const mine = a.physician_id === user?.physician_id;
-                            return (
-                              <p key={a.id} className={mine ? "font-semibold text-slate-900" : "text-slate-500"}>
-                                {p ? `${p.first_name} ${p.last_name[0]}.` : "Unassigned"}
-                              </p>
-                            );
-                          })
-                        ) : (
-                          <p className="text-red-500">Unfilled</p>
-                        )}
-                      </div>
+                      <button
+                        key={instance.id}
+                        type="button"
+                        disabled={!scheduler}
+                        onClick={() => setEditingShiftId(instance.id)}
+                        className={`w-full rounded-md px-1.5 py-1 text-left text-[11px] leading-tight ${
+                          short > 0 ? "bg-red-50" : "bg-brand-50"
+                        } ${scheduler ? "cursor-pointer hover:ring-1 hover:ring-brand-300" : "cursor-default"}`}
+                      >
+                        <p className={`font-medium ${short > 0 ? "text-red-700" : "text-brand-700"}`}>
+                          {shiftType?.name ?? instance.category}
+                        </p>
+                        {visible.map((a) => {
+                          const p = physicianById.get(a.physician_id);
+                          const mine = a.physician_id === user?.physician_id;
+                          return (
+                            <p key={a.id} className={mine ? "font-semibold text-slate-900" : "text-slate-500"}>
+                              {p ? `${p.first_name} ${p.last_name[0]}.` : "Unassigned"}
+                            </p>
+                          );
+                        })}
+                        {short > 0 && !onlyMine && <p className="text-red-500">Short {short}</p>}
+                      </button>
                     );
                   })}
                 </div>
@@ -171,10 +191,33 @@ export function SchedulePage() {
         </div>
       </Card>
 
-      <div className="mt-3 flex items-center gap-3 text-xs text-slate-400">
-        <Badge tone="blue">Shift</Badge>
-        <span>Only shifts from published schedules appear here.</span>
+      <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-slate-400">
+        <span className="flex items-center gap-1.5">
+          <span className="inline-block h-3 w-3 rounded bg-brand-50 ring-1 ring-brand-200" /> staffed
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="inline-block h-3 w-3 rounded bg-red-50 ring-1 ring-red-200" /> short of its requirement
+        </span>
+        <span>
+          {scheduler
+            ? "Click any shift to assign, reassign, or remove someone. Drafts are visible to you until published."
+            : "Only published schedules appear here."}
+        </span>
       </div>
+
+      {editingShift && (
+        <ShiftEditorPanel
+          shift={editingShift}
+          shiftType={shiftTypeById.get(editingShift.shift_type_id)}
+          assignments={assignmentsByShift.get(editingShift.id) ?? []}
+          physicianById={physicianById}
+          onClose={() => setEditingShiftId(null)}
+          onChanged={() => {
+            assignments.reload();
+            runs.reload();
+          }}
+        />
+      )}
     </div>
   );
 }

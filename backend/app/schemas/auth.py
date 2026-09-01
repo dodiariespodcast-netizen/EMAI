@@ -15,10 +15,34 @@ class OrgSignup(BaseModel):
 
 
 class UserCreate(BaseModel):
+    """Admin-created account. Omit `password` (the normal path) and the user
+    is emailed an invite link to set their own; supply one to hand out a
+    temporary password instead."""
+
     email: EmailStr
-    password: str = Field(min_length=8)
+    password: str | None = Field(default=None, min_length=8)
     role: UserRole = UserRole.PHYSICIAN
     physician_id: str | None = None
+
+
+class PasswordResetRequest(BaseModel):
+    email: EmailStr
+
+
+class PasswordResetConfirm(BaseModel):
+    token: str
+    new_password: str = Field(min_length=8)
+
+
+class InviteLinkRead(BaseModel):
+    """Returned to admins so they can hand over a link directly when email
+    isn't configured (or the invite email gets lost)."""
+
+    user_id: str
+    email: EmailStr
+    invite_url: str
+    expires_in_hours: int
+    email_sent: bool
 
 
 class UserUpdate(BaseModel):

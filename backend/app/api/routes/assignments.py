@@ -1,13 +1,16 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, require_scheduler
 from app.database import get_db
 from app.models.enums import ScheduleRunStatus
 from app.models.schedule import Assignment, ScheduleRun
 from app.models.shift import ShiftInstance, ShiftType
 from app.models.tenancy import Site, User
-from app.schemas.schedule import AssignmentDetail
+from app.schemas.schedule import AssignmentCreate, AssignmentDetail, AssignmentReassign
+from app.services.audit import log_audit
+from app.services.scheduling.service import get_or_create_rules
+from app.services.scheduling.swap_conflicts import find_assignment_conflict
 
 router = APIRouter(prefix="/assignments", tags=["assignments"])
 
@@ -77,3 +80,120 @@ def get_assignment(
     if row is None:
         raise HTTPException(status_code=404, detail="Assignment not found")
     return _to_detail(*row)
+
+
+@router.post("", response_model=AssignmentDetail, status_code=201)
+def create_assignment(
+    payload: AssignmentCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_scheduler),
+) -> AssignmentDetail:
+    """Hand-place a physician on a shift. Every real scheduler needs to
+    override the optimizer sometimes -- a late call-out, a deal struck in the
+    hallway -- so this exists, but it runs the same hard-rule check the solver
+    does and refuses (409) unless `force` is set, in which case the override
+    and its reason are written to the audit log."""
+    shift = (
+        db.query(ShiftInstance)
+        .filter(ShiftInstance.id == payload.shift_instance_id, ShiftInstance.org_id == current_user.org_id)
+        .first()
+    )
+    if shift is None:
+        raise HTTPException(status_code=404, detail="Shift not found")
+    if shift.schedule_run_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="This shift isn't part of a schedule run yet -- generate a schedule for its period first",
+        )
+
+    rules = get_or_create_rules(db, current_user.org_id)
+    conflict = find_assignment_conflict(db, current_user.org_id, shift, payload.physician_id, rules)
+    if conflict and not payload.force:
+        raise HTTPException(status_code=409, detail=conflict)
+
+    assignment = Assignment(
+        org_id=current_user.org_id,
+        schedule_run_id=shift.schedule_run_id,
+        shift_instance_id=shift.id,
+        physician_id=payload.physician_id,
+    )
+    db.add(assignment)
+    db.flush()
+    log_audit(
+        db, current_user.org_id, "assignment.create", "assignment", assignment.id, user_id=current_user.id,
+        details={
+            "shift_instance_id": shift.id,
+            "physician_id": payload.physician_id,
+            "forced_over_conflict": conflict if payload.force and conflict else None,
+            "override_reason": payload.override_reason,
+        },
+    )
+    db.commit()
+
+    row = _query(db, current_user.org_id).filter(Assignment.id == assignment.id).first()
+    return _to_detail(*row)
+
+
+@router.patch("/{assignment_id}", response_model=AssignmentDetail)
+def reassign_assignment(
+    assignment_id: str,
+    payload: AssignmentReassign,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_scheduler),
+) -> AssignmentDetail:
+    """Move an existing shift to a different physician."""
+    assignment = (
+        db.query(Assignment)
+        .filter(Assignment.id == assignment_id, Assignment.org_id == current_user.org_id)
+        .first()
+    )
+    if assignment is None:
+        raise HTTPException(status_code=404, detail="Assignment not found")
+    shift = db.query(ShiftInstance).filter(ShiftInstance.id == assignment.shift_instance_id).first()
+
+    rules = get_or_create_rules(db, current_user.org_id)
+    conflict = find_assignment_conflict(
+        db, current_user.org_id, shift, payload.physician_id, rules, exclude_assignment_id=assignment.id
+    )
+    if conflict and not payload.force:
+        raise HTTPException(status_code=409, detail=conflict)
+
+    previous_physician_id = assignment.physician_id
+    assignment.physician_id = payload.physician_id
+    log_audit(
+        db, current_user.org_id, "assignment.reassign", "assignment", assignment.id, user_id=current_user.id,
+        details={
+            "from_physician_id": previous_physician_id,
+            "to_physician_id": payload.physician_id,
+            "forced_over_conflict": conflict if payload.force and conflict else None,
+            "override_reason": payload.override_reason,
+        },
+    )
+    db.commit()
+
+    row = _query(db, current_user.org_id).filter(Assignment.id == assignment.id).first()
+    return _to_detail(*row)
+
+
+@router.delete("/{assignment_id}", status_code=204)
+def delete_assignment(
+    assignment_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_scheduler),
+) -> None:
+    """Unassign a shift, leaving it open. Shows up as unfilled on the
+    schedule and is claimable from the swap marketplace."""
+    assignment = (
+        db.query(Assignment)
+        .filter(Assignment.id == assignment_id, Assignment.org_id == current_user.org_id)
+        .first()
+    )
+    if assignment is None:
+        raise HTTPException(status_code=404, detail="Assignment not found")
+
+    log_audit(
+        db, current_user.org_id, "assignment.delete", "assignment", assignment.id, user_id=current_user.id,
+        details={"physician_id": assignment.physician_id, "shift_instance_id": assignment.shift_instance_id},
+    )
+    db.delete(assignment)
+    db.commit()

@@ -2,8 +2,8 @@ import { useState } from "react";
 import { useAuth } from "../lib/auth";
 import { useFetch } from "../lib/hooks";
 import { api, ApiError } from "../lib/api";
-import type { Physician, User, UserRole } from "../lib/types";
-import { Badge, Button, Card, CardHeader, ErrorBanner, Field, Input, PageHeader, Select } from "../components/ui";
+import type { InviteLink, Physician, User, UserRole } from "../lib/types";
+import { Badge, Button, Card, CardHeader, ErrorBanner, Field, Input, PageHeader, Select, SuccessBanner } from "../components/ui";
 import { titleCase } from "../lib/format";
 
 const ROLES: UserRole[] = ["owner", "admin", "scheduler", "physician"];
@@ -15,26 +15,39 @@ export function UsersPage() {
   const physicianById = new Map((physicians.data ?? []).map((p) => [p.id, p]));
 
   const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
   const [role, setRole] = useState<UserRole>("physician");
   const [physicianId, setPhysicianId] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [lastInvite, setLastInvite] = useState<InviteLink | null>(null);
 
   async function invite(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true);
     setError(null);
     try {
-      await api.post("/auth/users", { email, password, role, physician_id: physicianId || undefined });
+      // No password: the user is emailed a link and picks their own. The link
+      // comes back too, so an admin can hand it over directly when email isn't
+      // configured yet.
+      const result = await api.post<InviteLink>("/auth/users", {
+        email,
+        role,
+        physician_id: physicianId || undefined,
+      });
+      setLastInvite(result);
       setEmail("");
-      setPassword("");
+      setPhysicianId("");
       users.reload();
     } catch (err) {
       setError(err instanceof ApiError ? err.friendlyMessage : "Failed to invite");
     } finally {
       setBusy(false);
     }
+  }
+
+  async function resendInvite(userId: string) {
+    const result = await api.post<InviteLink>(`/auth/users/${userId}/invite`);
+    setLastInvite(result);
   }
 
   async function updateRole(userId: string, newRole: UserRole) {
@@ -52,18 +65,33 @@ export function UsersPage() {
       <PageHeader title="Users" subtitle="Login accounts. Link a user to a physician record so they see their own schedule and can submit requests." />
 
       <Card className="mb-6">
-        <CardHeader title="Invite a user" />
-        <form onSubmit={invite} className="grid grid-cols-2 gap-3 px-5 py-4 md:grid-cols-4">
+        <CardHeader
+          title="Invite a user"
+          subtitle="They get an email with a link to set their own password -- no temporary password to pass around"
+        />
+        <form onSubmit={invite} className="grid grid-cols-2 gap-3 px-5 py-4 md:grid-cols-3">
           {error && (
-            <div className="col-span-2 md:col-span-4">
+            <div className="col-span-2 md:col-span-3">
               <ErrorBanner message={error} />
+            </div>
+          )}
+          {lastInvite && (
+            <div className="col-span-2 space-y-2 md:col-span-3">
+              <SuccessBanner
+                message={`Invited ${lastInvite.email}${
+                  lastInvite.email_sent ? " -- an invite email is on its way." : "."
+                } The link expires in ${lastInvite.expires_in_hours} hours.`}
+              />
+              <div className="rounded-lg bg-slate-50 px-3 py-2">
+                <p className="mb-1 text-xs text-slate-500">
+                  Share this link directly if their email doesn't arrive:
+                </p>
+                <code className="block break-all text-xs text-slate-700">{lastInvite.invite_url}</code>
+              </div>
             </div>
           )}
           <Field label="Email">
             <Input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
-          </Field>
-          <Field label="Temporary password">
-            <Input type="password" required minLength={8} value={password} onChange={(e) => setPassword(e.target.value)} />
           </Field>
           <Field label="Role">
             <Select value={role} onChange={(e) => setRole(e.target.value as UserRole)}>
@@ -84,9 +112,9 @@ export function UsersPage() {
               ))}
             </Select>
           </Field>
-          <div className="col-span-2 md:col-span-4">
+          <div className="col-span-2 md:col-span-3">
             <Button type="submit" disabled={busy}>
-              {busy ? "Inviting…" : "Invite"}
+              {busy ? "Inviting…" : "Send invite"}
             </Button>
           </div>
         </form>
@@ -114,6 +142,9 @@ export function UsersPage() {
                     </option>
                   ))}
                 </Select>
+                <Button size="sm" variant="ghost" onClick={() => resendInvite(u.id)}>
+                  Re-send invite
+                </Button>
                 {u.id !== me?.id && (
                   <Button size="sm" variant="ghost" onClick={() => toggleActive(u)}>
                     {u.is_active ? "Disable" : "Enable"}

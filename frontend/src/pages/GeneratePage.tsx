@@ -1,9 +1,11 @@
 import { useState } from "react";
 import { useFetch } from "../lib/hooks";
-import { api, ApiError } from "../lib/api";
+import { api, API_BASE_URL, ApiError } from "../lib/api";
+import { useAuth } from "../lib/auth";
 import type { FairnessRow, ScheduleRun, ScheduleRunDetail, Site } from "../lib/types";
 import { Badge, Button, Card, CardHeader, EmptyState, ErrorBanner, Field, Input, PageHeader, Select, Spinner, StatCard } from "../components/ui";
 import { formatDate } from "../lib/format";
+import { Link } from "react-router-dom";
 
 const RUN_STATUS_TONE: Record<string, "slate" | "green" | "amber"> = {
   draft: "amber",
@@ -12,6 +14,7 @@ const RUN_STATUS_TONE: Record<string, "slate" | "green" | "amber"> = {
 };
 
 export function GeneratePage() {
+  const { token } = useAuth();
   const sites = useFetch(() => api.get<Site[]>("/sites"), []);
   const [siteId, setSiteId] = useState("");
   const activeSiteId = siteId || sites.data?.[0]?.id || "";
@@ -54,6 +57,20 @@ export function GeneratePage() {
     await api.post(`/schedule-runs/${runId}/publish`);
     runs.reload();
     if (result?.id === runId) setResult({ ...result, status: "published" });
+  }
+
+  async function downloadRunCsv(runId: string, label: string) {
+    // Fetched rather than a plain link so the bearer token travels with it.
+    const res = await fetch(new URL(`/schedule-runs/${runId}/export.csv`, API_BASE_URL).toString(), {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `schedule-${label}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
   }
 
   async function viewRun(runId: string) {
@@ -116,6 +133,13 @@ export function GeneratePage() {
             action={
               <div className="flex items-center gap-2">
                 <Badge tone={RUN_STATUS_TONE[result.status]}>{result.status}</Badge>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => downloadRunCsv(result.id, `${result.period_start}-to-${result.period_end}`)}
+                >
+                  Export CSV
+                </Button>
                 {result.status === "draft" && <Button size="sm" onClick={() => publish(result.id)}>Publish</Button>}
               </div>
             }
@@ -126,6 +150,15 @@ export function GeneratePage() {
             <StatCard label="Solve time" value={result.solve_seconds ? `${result.solve_seconds.toFixed(1)}s` : "—"} />
             <StatCard label="Assignments" value={result.assignments.length} />
           </div>
+          {result.unfilled_shift_count > 0 && (
+            <div className="mx-5 mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+              {result.unfilled_shift_count} shift(s) couldn't be filled under your current rules and roster. Open the{" "}
+              <Link to="/app/schedule" className="font-medium underline">
+                schedule
+              </Link>{" "}
+              to fill them by hand, or relax a rule and re-run.
+            </div>
+          )}
           {result.ai_summary && (
             <div className="mx-5 mb-5 rounded-lg bg-brand-50 px-4 py-3 text-sm text-brand-900">
               <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-brand-500">AI summary</p>

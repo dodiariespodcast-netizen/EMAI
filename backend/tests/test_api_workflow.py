@@ -250,7 +250,7 @@ def test_user_management(client):
     emails = {u["email"] for u in listing.json()}
     assert {"owner@users.example.com", "sched@users.example.com"} <= emails
 
-    updated = client.patch(f"/auth/users/{created.json()['id']}", json={"role": "admin"}, headers=owner_headers)
+    updated = client.patch(f"/auth/users/{created.json()['user_id']}", json={"role": "admin"}, headers=owner_headers)
     assert updated.status_code == 200
     assert updated.json()["role"] == "admin"
 

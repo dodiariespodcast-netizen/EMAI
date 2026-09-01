@@ -88,3 +88,21 @@ class AuditLog(Base, UUIDPKMixin):
     entity_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     details: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+class PasswordResetToken(Base, UUIDPKMixin):
+    """Single-use, expiring token backing both "I forgot my password" and
+    "an admin invited me, let me set my own password". Only the SHA-256
+    hash of the token is stored, so a database leak doesn't hand out
+    working reset links.
+    """
+
+    __tablename__ = "password_reset_tokens"
+
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    # "reset" (user-initiated) or "invite" (admin created the account for them)
+    purpose: Mapped[str] = mapped_column(String(20), default="reset")
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

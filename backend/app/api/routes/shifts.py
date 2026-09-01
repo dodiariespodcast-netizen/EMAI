@@ -1,13 +1,17 @@
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, require_scheduler
 from app.database import get_db
+from app.models.physician import Physician
+from app.models.schedule import Assignment, ScheduleRun
 from app.models.shift import ShiftInstance, ShiftType
 from app.models.tenancy import Site, User
 from app.schemas.shift import (
+    EligiblePhysician,
     ShiftInstanceCreate,
     ShiftInstanceGenerate,
     ShiftInstanceRead,
@@ -16,6 +20,8 @@ from app.schemas.shift import (
     SiteCreate,
     SiteRead,
 )
+from app.services.scheduling.service import get_or_create_rules
+from app.services.scheduling.swap_conflicts import find_assignment_conflict
 
 router = APIRouter(tags=["shifts"])
 
@@ -159,3 +165,59 @@ def _build_instance(org_id, shift_type: ShiftType, day, is_holiday: bool, requir
         required_physicians=required_override or shift_type.required_physicians,
         is_holiday=is_holiday,
     )
+
+
+@router.get("/shift-instances/{shift_instance_id}/eligible-physicians", response_model=list[EligiblePhysician])
+def list_eligible_physicians(
+    shift_instance_id: str,
+    exclude_assignment_id: str | None = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_scheduler),
+) -> list[EligiblePhysician]:
+    """Who could cover this shift, and for anyone who couldn't, why. Backs the
+    'assign someone' picker when a scheduler hand-edits the schedule."""
+    shift = (
+        db.query(ShiftInstance)
+        .filter(ShiftInstance.id == shift_instance_id, ShiftInstance.org_id == current_user.org_id)
+        .first()
+    )
+    if shift is None:
+        raise HTTPException(status_code=404, detail="Shift not found")
+
+    rules = get_or_create_rules(db, current_user.org_id)
+    physicians = (
+        db.query(Physician)
+        .filter(Physician.org_id == current_user.org_id, Physician.is_active.is_(True))
+        .order_by(Physician.last_name, Physician.first_name)
+        .all()
+    )
+
+    run = db.query(ScheduleRun).filter(ScheduleRun.id == shift.schedule_run_id).first() if shift.schedule_run_id else None
+    load: dict[str, int] = {}
+    if run is not None:
+        rows = (
+            db.query(Assignment.physician_id, func.count(Assignment.id))
+            .filter(Assignment.schedule_run_id == run.id)
+            .group_by(Assignment.physician_id)
+            .all()
+        )
+        load = {pid: count for pid, count in rows}
+
+    results = []
+    for physician in physicians:
+        conflict = find_assignment_conflict(
+            db, current_user.org_id, shift, physician.id, rules, exclude_assignment_id=exclude_assignment_id
+        )
+        results.append(
+            EligiblePhysician(
+                physician_id=physician.id,
+                name=f"{physician.first_name} {physician.last_name}",
+                employment_type=physician.employment_type.value,
+                conflict=conflict,
+                assigned_shifts_in_period=load.get(physician.id, 0),
+            )
+        )
+    # Conflict-free first, then least-loaded -- the order a scheduler filling a
+    # hole actually wants to read.
+    results.sort(key=lambda r: (r.conflict is not None, r.assigned_shifts_in_period, r.name))
+    return results

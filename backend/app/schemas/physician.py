@@ -73,3 +73,14 @@ class PhysicianRead(BaseModel):
     site_ids: list[str] = Field(default_factory=list)
 
     model_config = {"from_attributes": True}
+
+
+class PhysicianImportResult(BaseModel):
+    """Per-row outcome of a CSV roster import. Bad rows are reported with
+    their line number instead of failing the whole file."""
+
+    dry_run: bool
+    created_count: int
+    created_emails: list[str] = Field(default_factory=list)
+    error_count: int
+    errors: list[dict] = Field(default_factory=list)

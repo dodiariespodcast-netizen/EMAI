@@ -4,6 +4,7 @@ import { api, ApiError } from "../lib/api";
 import type { EmploymentType, Physician, Site } from "../lib/types";
 import { Badge, Button, Card, CardHeader, EmptyState, ErrorBanner, Field, Input, PageHeader, Select } from "../components/ui";
 import { titleCase } from "../lib/format";
+import { RosterImportCard } from "../components/RosterImportCard";
 
 const EMPLOYMENT_TYPES: EmploymentType[] = ["employed", "locums", "contract", "moonlighter"];
 
@@ -40,6 +41,7 @@ export function RosterPage() {
   const sites = useFetch(() => api.get<Site[]>("/sites"), []);
   const [editing, setEditing] = useState<Physician | null>(null);
   const [showForm, setShowForm] = useState(false);
+  const [showImport, setShowImport] = useState(false);
 
   return (
     <div>
@@ -47,16 +49,33 @@ export function RosterPage() {
         title="Roster"
         subtitle="Your physicians -- FTE, preferences, employment type, and site eligibility feed directly into the optimizer."
         action={
-          <Button
-            onClick={() => {
-              setEditing(null);
-              setShowForm((s) => !s);
-            }}
-          >
-            {showForm && !editing ? "Close" : "Add physician"}
-          </Button>
+          <div className="flex gap-2">
+            <Button variant="secondary" onClick={() => setShowImport((s) => !s)}>
+              {showImport ? "Close import" : "Import CSV"}
+            </Button>
+            <Button
+              onClick={() => {
+                setEditing(null);
+                setShowForm((s) => !s);
+              }}
+            >
+              {showForm && !editing ? "Close" : "Add physician"}
+            </Button>
+          </div>
         }
       />
+
+      {showImport && (
+        <div className="mb-6">
+          <RosterImportCard
+            sites={sites.data ?? []}
+            onImported={() => {
+              physicians.reload();
+              setShowImport(false);
+            }}
+          />
+        </div>
+      )}
 
       {(showForm || editing) && (
         <div className="mb-6">
